@@ -1353,6 +1353,31 @@ class EmlDeterminismusTest(IsolierteDatenbankTestCase):
         self.assertEqual(erster, zweiter)
 
 
+class ModalSichtbarkeitTest(unittest.TestCase):
+    """Regressionsschutz gegen den Demo-Blocker 'Overlay immer sichtbar':
+    Autoren-CSS (display:flex auf .detail-overlay) ueberstimmt die
+    Browser-Standardregel [hidden] { display:none }. Beide Pruefungen sind
+    statisch und brauchen keinen Browser."""
+
+    def test_overlays_starten_mit_hidden_attribut(self):
+        html = (REPO_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
+        for overlay_id in ("detail-overlay", "reset-overlay"):
+            treffer = re.search(rf'<div id="{overlay_id}"[^>]*>', html)
+            self.assertIsNotNone(treffer, f"Overlay {overlay_id} fehlt in index.html")
+            self.assertIn("hidden", treffer.group(0),
+                          f"Overlay {overlay_id} muss beim Seitenstart das hidden-Attribut tragen")
+
+    def test_css_guard_verbirgt_versteckte_overlays(self):
+        css = (REPO_ROOT / "web" / "static" / "styles.css").read_text(encoding="utf-8")
+        guard = re.search(r"\.detail-overlay\[hidden\]\s*\{[^}]*display\s*:\s*none", css)
+        self.assertIsNotNone(
+            guard,
+            "styles.css braucht die Regel '.detail-overlay[hidden] { display: none; }' -- "
+            "sonst ueberstimmt display:flex das hidden-Attribut und beide Dialoge "
+            "sind dauerhaft sichtbar (Seite unbedienbar).",
+        )
+
+
 class EmlHttpTest(HttpTestCase):
     """Ende-zu-Ende ueber die echte HTTP-API: EML-Upload, Vorgang in der
     Ergebnis-Antwort, keine absoluten Pfade."""

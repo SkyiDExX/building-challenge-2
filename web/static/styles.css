@@ -233,7 +233,12 @@ main { max-width: 1120px; margin: 0 auto; padding: 8px 20px 40px; }
 .btn-sekundaer { background: transparent; color: var(--text); }
 .btn-sekundaer:hover, .btn-primaer:not(:disabled):hover { filter: brightness(1.08); }
 
-/* Detailansicht und Dialoge */
+/* Detailansicht und Dialoge.
+   Wichtig: Die display:flex-Regel unten wuerde in der Kaskade die
+   Browser-Standardregel [hidden] { display: none } ueberstimmen
+   (Autoren-CSS schlaegt User-Agent-CSS). Ohne diese Guard-Regel waeren
+   beide Overlays dauerhaft sichtbar und die Seite unbedienbar. */
+.detail-overlay[hidden] { display: none; }
 .detail-overlay {
   position: fixed;
   inset: 0;

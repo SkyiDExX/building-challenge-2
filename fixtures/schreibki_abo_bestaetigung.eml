@@ -1,0 +1,21 @@
+From: SchreibKI Plus <service@schreibki.example>
+To: demo@belegwaechter.invalid
+Subject: Ihre Abo-Bestaetigung
+Date: Sun, 05 Jul 2026 10:00:00 +0200
+Message-ID: <fixture-schreibki-abo@schreibki.example>
+Content-Type: multipart/alternative;
+ boundary="belegwaechter-fixture-boundary-01"
+
+--belegwaechter-fixture-boundary-01
+Content-Type: text/html; charset="utf-8"
+Content-Transfer-Encoding: quoted-printable
+MIME-Version: 1.0
+
+<html><head><style>td { color: #000; }</style></head><body><table style=3D"wi=
+dth:100%"><tr><td>SchreibKI Plus</td></tr><tr><td>Abo-Bestaetigung</td></tr><=
+tr><td>Ihr Abo verlaengert sich am 05.08.2026.</td></tr><tr><td>Tarif:</td><t=
+d>Plus</td></tr><tr><td>Betrag:</td><td>12,00 EUR</td></tr><tr><td>Waehrung:<=
+/td><td>EUR</td></tr></table><img src=3D"https://tracking.invalid/pixel.gif" =
+width=3D"1" height=3D"1"></body></html>
+
+--belegwaechter-fixture-boundary-01--

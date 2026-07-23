@@ -23,7 +23,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 FIXTURES = REPO_ROOT / "fixtures"
 
-from belegwaechter import agent, dateinamen, entscheiden, extrahieren, fehlertexte, speicher  # noqa: E402
+from belegwaechter import agent, dateien, dateinamen, entscheiden, extrahieren, fehlertexte, mailparser, speicher  # noqa: E402
 from belegwaechter.modelle import (  # noqa: E402
     AUSGANG_DUBLETTE,
     AUSGANG_FEHLGESCHLAGEN,
@@ -944,6 +944,116 @@ class CsvSicherheitTest(HttpTestCase):
         text = self._csv_holen()
         self.assertNotIn("1.2.3,00", text)
         self.assertNotIn("kaputt.pdf", text)
+
+
+class EmlErkennungTest(unittest.TestCase):
+    """EML-Erkennung per Header-Heuristik: E-Mails werden erkannt, bestehende
+    Typen bleiben unberuehrt, beliebige Textdateien gelten nicht als E-Mail."""
+
+    def test_eml_fixtures_werden_als_eml_erkannt(self):
+        for name in (
+            "cloudbasis_rechnung_und_zahlung.eml",
+            "schreibki_abo_bestaetigung.eml",
+            "mobiltel_zahlungsbestaetigung.eml",
+            "domainly_nur_html_rechnung.eml",
+        ):
+            self.assertEqual(dateien.dateityp_erkennen(_lesen(name)), "EML", name)
+
+    def test_pdf_und_png_erkennung_bleibt_unveraendert(self):
+        self.assertEqual(dateien.dateityp_erkennen(_lesen("domainly_juli.pdf")), "PDF")
+        self.assertEqual(dateien.dateityp_erkennen(_lesen("mobiltel_screenshot.png")), "PNG")
+
+    def test_label_wert_textdatei_ist_keine_eml(self):
+        inhalt = "Anbieter: Test GmbH\nDatum: 01.07.2026\nBetrag: 5,00 EUR\n".encode("utf-8")
+        self.assertEqual(dateien.dateityp_erkennen(inhalt), "unbekannt")
+
+    def test_einzelne_headerzeile_reicht_nicht(self):
+        inhalt = b"Subject: nur ein einzelner Header\n\nRestlicher Text ohne Mailstruktur."
+        self.assertEqual(dateien.dateityp_erkennen(inhalt), "unbekannt")
+
+    def test_eml_endung_gilt_nur_fuer_eml_dateien(self):
+        self.assertTrue(dateien.endung_passt_zu_typ("rechnung.eml", "EML"))
+        self.assertFalse(dateien.endung_passt_zu_typ("rechnung.txt", "EML"))
+
+    def test_eml_und_mailtext_sind_stufe_a_original(self):
+        self.assertEqual(dateien.stufe_und_quelle("EML")[0], "A")
+        self.assertEqual(dateien.stufe_und_quelle("MAILTEXT")[0], "A")
+
+
+class MailparserTest(unittest.TestCase):
+    """Zerlegung der synthetischen EML-Fixtures: MIME-Varianten, Encodings
+    und die Magic-Bytes-Pruefung der Anhaenge."""
+
+    def test_zwei_pdf_anhaenge_werden_extrahiert(self):
+        eml = mailparser.zerlegen(_lesen("cloudbasis_rechnung_und_zahlung.eml"))
+        self.assertEqual(len(eml.anhaenge), 2)
+        namen = [a.dateiname for a in eml.anhaenge]
+        self.assertIn("cloudbasis_august_rechnung.pdf", namen)
+        self.assertIn("cloudbasis_august_zahlungsbeleg.pdf", namen)
+
+    def test_octet_stream_anhang_ist_per_signatur_ein_pdf(self):
+        eml = mailparser.zerlegen(_lesen("cloudbasis_rechnung_und_zahlung.eml"))
+        zahlungsbeleg = [a for a in eml.anhaenge if "zahlungsbeleg" in a.dateiname][0]
+        self.assertEqual(zahlungsbeleg.deklarierter_typ, "application/octet-stream")
+        self.assertEqual(dateien.dateityp_erkennen(zahlungsbeleg.inhalt), "PDF",
+                         "Magic-Bytes muessen den deklarierten MIME-Typ ueberstimmen")
+
+    def test_base64_textkoerper_wird_dekodiert(self):
+        roh = _lesen("cloudbasis_rechnung_und_zahlung.eml")
+        self.assertIn(b"base64", roh, "Fixture muss einen base64-Textteil enthalten")
+        eml = mailparser.zerlegen(roh)
+        self.assertEqual(eml.text_quelle, "text/plain")
+        self.assertIn("Zahlungsbeleg fuer August 2026", eml.text)
+
+    def test_html_only_alternative_ohne_plain_wird_text(self):
+        eml = mailparser.zerlegen(_lesen("schreibki_abo_bestaetigung.eml"))
+        self.assertEqual(eml.text_quelle, "text/html")
+        self.assertIn("verlaengert sich am 05.08.2026", eml.text)
+        self.assertIn("Betrag: 12,00 EUR", eml.text)
+
+    def test_nicht_multipart_html_mail_wird_zerlegt(self):
+        eml = mailparser.zerlegen(_lesen("domainly_nur_html_rechnung.eml"))
+        self.assertEqual(eml.text_quelle, "text/html")
+        self.assertEqual(eml.anhaenge, [])
+        self.assertIn("Rechnung Nr. RE-9001-08", eml.text)
+
+    def test_tracking_pixel_und_styles_erzeugen_keinen_text(self):
+        eml = mailparser.zerlegen(_lesen("domainly_nur_html_rechnung.eml"))
+        self.assertNotIn("tracking.invalid", eml.text)
+        self.assertNotIn("https://", eml.text)
+        abo = mailparser.zerlegen(_lesen("schreibki_abo_bestaetigung.eml"))
+        self.assertNotIn("color:", abo.text, "Inline-CSS darf nicht im Text landen")
+
+    def test_html_zu_text_erzeugt_label_wert_zeilen(self):
+        text = mailparser.html_zu_text(
+            "<html><head><script>boese()</script></head><body>"
+            "<table><tr><td>Betrag:</td><td>7,00 EUR</td></tr></table></body></html>"
+        )
+        self.assertEqual(text, "Betrag: 7,00 EUR")
+        self.assertNotIn("boese", text)
+
+    def test_zerlegung_oeffnet_keine_netzwerksockets(self):
+        original_socket = socket.socket
+
+        def gesperrt(*args, **kwargs):
+            raise AssertionError("Netzwerkzugriff waehrend der EML-Zerlegung ist nicht erlaubt.")
+
+        socket.socket = gesperrt
+        try:
+            for name in (
+                "cloudbasis_rechnung_und_zahlung.eml",
+                "schreibki_abo_bestaetigung.eml",
+                "domainly_nur_html_rechnung.eml",
+            ):
+                mailparser.zerlegen(_lesen(name))
+        finally:
+            socket.socket = original_socket
+
+    def test_kaputte_eml_faellt_leer_und_ohne_ausnahme_zurueck(self):
+        eml = mailparser.zerlegen(b"From: x@example.invalid\r\nSubject: kaputt\r\n\r\n")
+        self.assertEqual(eml.text, "")
+        self.assertEqual(eml.text_quelle, "keine")
+        self.assertEqual(eml.anhaenge, [])
 
 
 if __name__ == "__main__":

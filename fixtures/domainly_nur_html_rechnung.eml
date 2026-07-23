@@ -1,0 +1,16 @@
+From: Domainly GmbH <billing@domainly.example>
+To: demo@belegwaechter.invalid
+Subject: Rechnung Hosting Basic August 2026
+Date: Sat, 01 Aug 2026 06:30:00 +0200
+Message-ID: <fixture-domainly-august@domainly.example>
+Content-Type: text/html; charset="utf-8"
+Content-Transfer-Encoding: quoted-printable
+MIME-Version: 1.0
+
+<html><head><title>Rechnung</title></head><body><img src=3D"https://tracking.=
+invalid/open.gif" width=3D"1" height=3D"1"><table style=3D"border:0"><tr><td>=
+Domainly GmbH</td></tr><tr><td>Rechnung Nr. RE-9001-08</td></tr><tr><td>Datum=
+:</td><td>01.08.2026</td></tr><tr><td>Leistungszeitraum:</td><td>monatlich</t=
+d></tr><tr><td>Tarif:</td><td>Hosting Basic</td></tr><tr><td>Betrag:</td><td>=
+9,00 EUR</td></tr><tr><td>Waehrung:</td><td>EUR</td></tr></table></body></htm=
+l>

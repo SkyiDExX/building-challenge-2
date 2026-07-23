@@ -1,0 +1,79 @@
+From: CloudBasis GmbH <abrechnung@cloudbasis.example>
+To: demo@belegwaechter.invalid
+Subject: Ihre CloudBasis Rechnung August 2026
+Date: Sat, 01 Aug 2026 08:00:00 +0200
+Message-ID: <fixture-cloudbasis-august@cloudbasis.example>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="belegwaechter-fixture-boundary-01"
+
+--belegwaechter-fixture-boundary-01
+Content-Type: multipart/alternative;
+ boundary="belegwaechter-fixture-boundary-02"
+
+--belegwaechter-fixture-boundary-02
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: base64
+
+R3V0ZW4gVGFnLAoKaW0gQW5oYW5nIGZpbmRlbiBTaWUgSWhyZSBSZWNobnVuZyB1bmQgZGVuIFph
+aGx1bmdzYmVsZWcgZnVlciBBdWd1c3QgMjAyNi4KCklocmUgQ2xvdWRCYXNpcyBHbWJICg==
+
+--belegwaechter-fixture-boundary-02
+Content-Type: text/html; charset="utf-8"
+Content-Transfer-Encoding: quoted-printable
+MIME-Version: 1.0
+
+<html><body><table><tr><td>Guten Tag,</td></tr><tr><td>im Anhang finden Sie I=
+hre Rechnung und den Zahlungsbeleg fuer August 2026.</td></tr><tr><td>Ihre Cl=
+oudBasis GmbH</td></tr></table></body></html>
+
+--belegwaechter-fixture-boundary-02--
+
+--belegwaechter-fixture-boundary-01
+Content-Type: application/pdf
+Content-Transfer-Encoding: base64
+Content-Disposition: attachment; filename="cloudbasis_august_rechnung.pdf"
+MIME-Version: 1.0
+
+JVBERi0xLjQKMSAwIG9iago8PCAvVHlwZSAvQ2F0YWxvZyAvUGFnZXMgMiAwIFIgPj4KZW5kb2Jq
+CjIgMCBvYmoKPDwgL1R5cGUgL1BhZ2VzIC9LaWRzIFszIDAgUl0gL0NvdW50IDEgPj4KZW5kb2Jq
+CjMgMCBvYmoKPDwgL1R5cGUgL1BhZ2UgL1BhcmVudCAyIDAgUiAvTWVkaWFCb3ggWzAgMCA1OTUg
+ODQyXSAvUmVzb3VyY2VzIDw8IC9Gb250IDw8IC9GMSA0IDAgUiA+PiA+PiAvQ29udGVudHMgNSAw
+IFIgPj4KZW5kb2JqCjQgMCBvYmoKPDwgL1R5cGUgL0ZvbnQgL1N1YnR5cGUgL1R5cGUxIC9CYXNl
+Rm9udCAvSGVsdmV0aWNhID4+CmVuZG9iago1IDAgb2JqCjw8IC9MZW5ndGggMzIyID4+CnN0cmVh
+bQpCVAovRjEgMTEgVGYKMSAwIDAgMSA1MCA3ODAgVG0gKENsb3VkQmFzaXMgR21iSCkgVGoKMSAw
+IDAgMSA1MCA3NjAgVG0gKFJlY2hudW5nIE5yLiBSRS0zMzAxLTA4KSBUagoxIDAgMCAxIDUwIDc0
+MCBUbSAoRGF0dW06IDAxLjA4LjIwMjYpIFRqCjEgMCAwIDEgNTAgNzIwIFRtIChMZWlzdHVuZ3N6
+ZWl0cmF1bTogMDEuMDguMjAyNiAtIDMxLjA4LjIwMjYpIFRqCjEgMCAwIDEgNTAgNzAwIFRtIChU
+YXJpZjogU3RhbmRhcmQpIFRqCjEgMCAwIDEgNTAgNjgwIFRtIChCZXRyYWc6IDIzLDAwIEVVUikg
+VGoKMSAwIDAgMSA1MCA2NjAgVG0gKFdhZWhydW5nOiBFVVIpIFRqCmVuZHN0cmVhbQplbmRvYmoK
+eHJlZgowIDYKMDAwMDAwMDAwMCA2NTUzNSBmIAowMDAwMDAwMDA5IDAwMDAwIG4gCjAwMDAwMDAw
+NTggMDAwMDAgbiAKMDAwMDAwMDExNSAwMDAwMCBuIAowMDAwMDAwMjQxIDAwMDAwIG4gCjAwMDAw
+MDAzMTEgMDAwMDAgbiAKdHJhaWxlcgo8PCAvU2l6ZSA2IC9Sb290IDEgMCBSID4+CnN0YXJ0eHJl
+Zgo2ODQKJSVFT0Y=
+
+--belegwaechter-fixture-boundary-01
+Content-Type: application/octet-stream
+Content-Transfer-Encoding: base64
+Content-Disposition: attachment;
+ filename="cloudbasis_august_zahlungsbeleg.pdf"
+MIME-Version: 1.0
+
+JVBERi0xLjQKMSAwIG9iago8PCAvVHlwZSAvQ2F0YWxvZyAvUGFnZXMgMiAwIFIgPj4KZW5kb2Jq
+CjIgMCBvYmoKPDwgL1R5cGUgL1BhZ2VzIC9LaWRzIFszIDAgUl0gL0NvdW50IDEgPj4KZW5kb2Jq
+CjMgMCBvYmoKPDwgL1R5cGUgL1BhZ2UgL1BhcmVudCAyIDAgUiAvTWVkaWFCb3ggWzAgMCA1OTUg
+ODQyXSAvUmVzb3VyY2VzIDw8IC9Gb250IDw8IC9GMSA0IDAgUiA+PiA+PiAvQ29udGVudHMgNSAw
+IFIgPj4KZW5kb2JqCjQgMCBvYmoKPDwgL1R5cGUgL0ZvbnQgL1N1YnR5cGUgL1R5cGUxIC9CYXNl
+Rm9udCAvSGVsdmV0aWNhID4+CmVuZG9iago1IDAgb2JqCjw8IC9MZW5ndGggMzgwID4+CnN0cmVh
+bQpCVAovRjEgMTEgVGYKMSAwIDAgMSA1MCA3ODAgVG0gKENsb3VkQmFzaXMgR21iSCkgVGoKMSAw
+IDAgMSA1MCA3NjAgVG0gKFphaGx1bmdzYmVsZWcpIFRqCjEgMCAwIDEgNTAgNzQwIFRtIChaYWhs
+dW5nIGVyaGFsdGVuIHp1ciBSZWNobnVuZyBOci4gUkUtMzMwMS0wOCkgVGoKMSAwIDAgMSA1MCA3
+MjAgVG0gKERhdHVtOiAwMS4wOC4yMDI2KSBUagoxIDAgMCAxIDUwIDcwMCBUbSAoTGVpc3R1bmdz
+emVpdHJhdW06IDAxLjA4LjIwMjYgLSAzMS4wOC4yMDI2KSBUagoxIDAgMCAxIDUwIDY4MCBUbSAo
+VGFyaWY6IFN0YW5kYXJkKSBUagoxIDAgMCAxIDUwIDY2MCBUbSAoQmV0cmFnOiAyMywwMCBFVVIp
+IFRqCjEgMCAwIDEgNTAgNjQwIFRtIChXYWVocnVuZzogRVVSKSBUagplbmRzdHJlYW0KZW5kb2Jq
+CnhyZWYKMCA2CjAwMDAwMDAwMDAgNjU1MzUgZiAKMDAwMDAwMDAwOSAwMDAwMCBuIAowMDAwMDAw
+MDU4IDAwMDAwIG4gCjAwMDAwMDAxMTUgMDAwMDAgbiAKMDAwMDAwMDI0MSAwMDAwMCBuIAowMDAw
+MDAwMzExIDAwMDAwIG4gCnRyYWlsZXIKPDwgL1NpemUgNiAvUm9vdCAxIDAgUiA+PgpzdGFydHhy
+ZWYKNzQyCiUlRU9G
+
+--belegwaechter-fixture-boundary-01--

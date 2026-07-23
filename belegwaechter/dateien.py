@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 
+from belegwaechter import mailparser
 from belegwaechter.modelle import QUELLE_ERFASSUNGSNACHWEIS, QUELLE_ORIGINAL
 
 _PDF_MAGIC = b"%PDF-"
@@ -18,6 +19,7 @@ _TYP_ZU_ENDUNGEN = {
     "PDF": {"pdf"},
     "PNG": {"png"},
     "JPEG": {"jpg", "jpeg"},
+    "EML": {"eml"},
 }
 
 
@@ -33,17 +35,21 @@ def dateityp_erkennen(inhalt: bytes) -> str:
         return "PNG"
     if inhalt.startswith(_JPEG_MAGIC):
         return "JPEG"
+    # EML hat keine Magic-Bytes; die Header-Heuristik laeuft bewusst NACH den
+    # Signaturpruefungen (ein PDF kann nie mit RFC-5322-Headerzeilen beginnen).
+    if mailparser.ist_eml(inhalt):
+        return "EML"
     return "unbekannt"
 
 
 def stufe_und_quelle(dateityp: str) -> tuple[str, str]:
     """Ordnet den erkannten Dateityp der Input-Leiter aus MASTER_PLAN Abschnitt 6 zu.
 
-    Stufe A (PDF): bevorzugte Originalquelle.
+    Stufe A (PDF, EML, Mailtext): bevorzugte Originalquelle mit lesbarem Text.
     Stufe B (PNG/JPEG): komfortable Bildquelle, niemals automatisch Original.
     Stufe C (unbekannt): Hinweis ohne verwertbaren Beleginhalt.
     """
-    if dateityp == "PDF":
+    if dateityp in ("PDF", "EML", "MAILTEXT"):
         return "A", QUELLE_ORIGINAL
     if dateityp in ("PNG", "JPEG"):
         return "B", QUELLE_ERFASSUNGSNACHWEIS

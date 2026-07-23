@@ -48,32 +48,32 @@ def klassifizieren(
             if wort in gesamt:
                 return (
                     DOKUMENTART_ZAHLUNGSBELEG,
-                    f"Als Zahlungsbeleg eingeordnet: Schluesselwort '{wort}' gefunden.",
+                    f"Als Zahlungsbeleg eingeordnet: Schlüsselwort '{wort}' gefunden.",
                 )
         for wort in _ABO_WOERTER:
             if wort in gesamt:
                 return (
                     DOKUMENTART_ABO_BESTAETIGUNG,
-                    f"Als Abo-Bestaetigung eingeordnet: Schluesselwort '{wort}' gefunden.",
+                    f"Als Abo-Bestätigung eingeordnet: Schlüsselwort '{wort}' gefunden.",
                 )
         for wort in _RECHNUNG_WOERTER:
             if wort in gesamt:
                 return (
                     DOKUMENTART_RECHNUNG,
-                    f"Als Rechnung eingeordnet: Schluesselwort '{wort}' gefunden.",
+                    f"Als Rechnung eingeordnet: Schlüsselwort '{wort}' gefunden.",
                 )
         if betrag_vorhanden:
             return (
                 DOKUMENTART_SONSTIGER_KOSTENNACHWEIS,
                 "Als sonstiger Kostennachweis eingeordnet: Betrag vorhanden, "
-                "aber kein eindeutiges Schluesselwort gefunden.",
+                "aber kein eindeutiges Schlüsselwort gefunden.",
             )
         return (
             DOKUMENTART_UNBESTIMMT,
-            "Dokumentart unbestimmt: weder Schluesselwort noch Betrag gefunden. Nichts geraten.",
+            "Dokumentart unbestimmt: weder Schlüsselwort noch Betrag gefunden. Nichts geraten.",
         )
     except Exception:
         return (
             DOKUMENTART_UNBESTIMMT,
-            "Dokumentart unbestimmt: Einordnung nicht moeglich. Nichts geraten.",
+            "Dokumentart unbestimmt: Einordnung nicht möglich. Nichts geraten.",
         )

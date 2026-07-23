@@ -66,7 +66,7 @@ class Ausfuehrungsplan:
         }
 
 
-_ZIEL = "Beleg pruefen, einordnen und mit nachvollziehbarer Begruendung entscheiden."
+_ZIEL = "Beleg prüfen, einordnen und mit nachvollziehbarer Begründung entscheiden."
 
 
 def _quellenklasse(stufe: str, endung_konsistent: bool, dateityp: str = "") -> str:
@@ -92,15 +92,15 @@ def _werkzeuge_textquelle(extraktionswerkzeug: str, quelle_beschreibung: str) ->
         ),
         "checkliste": Werkzeugschritt(
             "checkliste", "checkliste-fail-closed", True,
-            f"{quelle_beschreibung}: Vollstaendigkeit wird geprueft.",
+            f"{quelle_beschreibung}: Vollständigkeit wird geprüft.",
         ),
         "bestand": Werkzeugschritt(
             "bestand", "hash-und-referenz-abgleich", True,
-            f"{quelle_beschreibung}: Duplikat- und Dublettenpruefung moeglich.",
+            f"{quelle_beschreibung}: Duplikat- und Dublettenprüfung möglich.",
         ),
         "radar": Werkzeugschritt(
             "radar", "radar-vergleichbarkeit", True,
-            "Vorlaeufig aktiv, wird nach Evidenz erneut geprueft.",
+            "Vorläufig aktiv, wird nach Evidenz erneut geprüft.",
         ),
     }
 
@@ -135,7 +135,7 @@ def plan_erstellen(stufe: str, endung_konsistent: bool, dateityp: str = "") -> A
         aktionen = ["original-anfordern"]
         stopbedingungen = ["Kein Original vorhanden"]
     elif klasse == QUELLENKLASSE_SIGNATUR_WIDERSPRUCH:
-        werkzeuge = _werkzeuge_inaktiv("Kein vertrauenswuerdiger Originalinhalt.")
+        werkzeuge = _werkzeuge_inaktiv("Kein vertrauenswürdiger Originalinhalt.")
         werkzeuge["extraktion"] = Werkzeugschritt(
             "extraktion", "keins", False,
             "Dateiendung und Dateisignatur widersprechen sich.",
@@ -187,33 +187,33 @@ def plan_verfeinern(
 
     if lesefehler:
         neue_werkzeuge["dokumentart"] = Werkzeugschritt(
-            "dokumentart", "keins", False, "Uebersprungen: kein lesbarer Inhalt fuer die Einordnung."
+            "dokumentart", "keins", False, "Übersprungen: kein lesbarer Inhalt für die Einordnung."
         )
         neue_werkzeuge["checkliste"] = Werkzeugschritt(
-            "checkliste", "keins", False, "Uebersprungen: kein lesbarer Originalbeleg vorhanden."
+            "checkliste", "keins", False, "Übersprungen: kein lesbarer Originalbeleg vorhanden."
         )
         neue_werkzeuge["bestand"] = Werkzeugschritt(
-            "bestand", "keins", False, "Uebersprungen: kein vergleichbarer Originalbeleg vorhanden."
+            "bestand", "keins", False, "Übersprungen: kein vergleichbarer Originalbeleg vorhanden."
         )
         neue_werkzeuge["radar"] = Werkzeugschritt(
-            "radar", "keins", False, "Uebersprungen: Lesefehler, kein auswertbarer Inhalt."
+            "radar", "keins", False, "Übersprungen: Lesefehler, kein auswertbarer Inhalt."
         )
         grund = "Lesefehler: Dokumentart, Checkliste, Bestandsabgleich und Radar deaktiviert."
     elif dublette:
         neue_werkzeuge["radar"] = Werkzeugschritt(
-            "radar", "keins", False, "Uebersprungen: Beleg ist eine Dublette, keine Historienaktualisierung."
+            "radar", "keins", False, "Übersprungen: Beleg ist eine Dublette, keine Historienaktualisierung."
         )
         grund = "Dublette erkannt: Radar deaktiviert."
     elif checkliste_vollstaendig is False:
         neue_werkzeuge["radar"] = Werkzeugschritt(
-            "radar", "keins", False, "Uebersprungen: Checkliste unvollstaendig, Automatikpfad endet in Review."
+            "radar", "keins", False, "Übersprungen: Checkliste unvollständig, Automatikpfad endet in Review."
         )
-        grund = "Checkliste unvollstaendig: Radar deaktiviert."
+        grund = "Checkliste unvollständig: Radar deaktiviert."
     elif dokumentart in ("zahlungsbeleg", "abo_bestaetigung"):
         neue_werkzeuge["radar"] = Werkzeugschritt(
             "radar", "keins", False,
-            "Uebersprungen: kein Abovergleich fuer diese Dokumentart, "
-            "sie darf die Preisbaseline nicht verfaelschen.",
+            "Übersprungen: kein Abovergleich für diese Dokumentart, "
+            "sie darf die Preisbaseline nicht verfälschen.",
         )
         grund = f"Dokumentart '{dokumentart}': Radar deaktiviert, keine Baseline-Aktualisierung."
 
@@ -234,7 +234,7 @@ def plan_verfeinern(
 
 _ZIEL_EML = (
     "E-Mail lokal zerlegen, Dokumente einem Kostenvorgang zuordnen und die "
-    "naechste Aktivitaet nur mit Evidenz einordnen."
+    "nächste Aktivität nur mit Evidenz einordnen."
 )
 
 
@@ -249,11 +249,11 @@ def plan_erstellen_eml() -> Ausfuehrungsplan:
         werkzeuge={
             "zerlegung": Werkzeugschritt(
                 "zerlegung", "mail-parser", True,
-                "EML erkannt: Textkoerper und Anhaenge werden lokal zerlegt.",
+                "EML erkannt: Textkörper und Anhänge werden lokal zerlegt.",
             ),
             "textkoerper": Werkzeugschritt(
                 "textkoerper", "mailtext-beleg", True,
-                "Vorlaeufig aktiv, wird nach der Zerlegung anhand der Anhaenge erneut geprueft.",
+                "Vorläufig aktiv, wird nach der Zerlegung anhand der Anhänge erneut geprüft.",
             ),
         },
         pruefungen=["Anhaenge per Dateisignatur pruefen", "Textkoerper-Einstufung"],
@@ -274,18 +274,18 @@ def eml_plan_verfeinern(
     grund = None
     if anzahl_anhaenge > 0:
         grund = (
-            f"Textkoerper ist Begleittext zu {anzahl_anhaenge} "
-            f"Anhaengen, kein eigenstaendiger Beleg."
+            f"Textkörper ist Begleittext zu {anzahl_anhaenge} "
+            f"Anhängen, kein eigenständiger Beleg."
         )
     elif not text_vorhanden:
-        grund = "Kein lesbarer Textkoerper vorhanden."
+        grund = "Kein lesbarer Textkörper vorhanden."
 
     if grund is None:
         return plan
 
     neue_werkzeuge = dict(plan.werkzeuge)
     neue_werkzeuge["textkoerper"] = Werkzeugschritt(
-        "textkoerper", "keins", False, f"Uebersprungen: {grund}"
+        "textkoerper", "keins", False, f"Übersprungen: {grund}"
     )
     return Ausfuehrungsplan(
         version=plan.version + 1,

@@ -89,7 +89,7 @@ def _schritt(
 _BEKANNTE_SCHRITTNAMEN_JE_WERKZEUG = {
     "extraktion": "Felder extrahiert",
     "dokumentart": "Dokumentart bestimmt",
-    "checkliste": "Vollstaendigkeit geprueft",
+    "checkliste": "Vollständigkeit geprüft",
     "bestand": "Bestand abgeglichen",
     "radar": "Abovergleich bewertet",
 }
@@ -162,7 +162,7 @@ def _plan_revidieren(
     if neuer_plan.version == plan.version:
         return plan
     t0 = _jetzt()
-    _schritt(beleg, "Ausfuehrungsplan aktualisiert", "ok", "planung", neuer_plan.revisionsgrund, t0, _jetzt())
+    _schritt(beleg, "Ausführungsplan aktualisiert", "ok", "planung", neuer_plan.revisionsgrund, t0, _jetzt())
     plaene.append(neuer_plan)
     return neuer_plan
 
@@ -193,7 +193,7 @@ def _status_ableiten(
         return DOKUMENTSTATUS_ZURUECKGESTELLT, REVIEWSTATUS_OFFEN, aufgabe
     if ausgang == AUSGANG_FEHLGESCHLAGEN:
         return DOKUMENTSTATUS_FEHLGESCHLAGEN, REVIEWSTATUS_OFFEN, "Original erneut ablegen"
-    return DOKUMENTSTATUS_ZURUECKGESTELLT, REVIEWSTATUS_OFFEN, "Beleg pruefen"
+    return DOKUMENTSTATUS_ZURUECKGESTELLT, REVIEWSTATUS_OFFEN, "Beleg prüfen"
 
 
 def verarbeite_datei(
@@ -229,25 +229,25 @@ def verarbeite_datei(
         t0, _jetzt(),
     )
 
-    # 2. Wahrnehmen: Quellenqualitaet bewertet
+    # 2. Wahrnehmen: Quellenqualität bewertet
     t0 = _jetzt()
     stufe, quellenstatus = dateien.stufe_und_quelle(dateityp)
     beleg.stufe = stufe
     beleg.quellenstatus = quellenstatus
     _schritt(
-        beleg, "Quellenqualitaet bewertet", "ok", "input-leiter",
+        beleg, "Quellenqualität bewertet", "ok", "input-leiter",
         f"Stufe {stufe} zugeordnet ({quellenstatus}).",
         t0, _jetzt(),
     )
 
     endung_konsistent = dateien.endung_passt_zu_typ(anzeigename, dateityp)
 
-    # 3. Planen: Ausfuehrungsplan erstellt (Version 1, einzige Steuerungsquelle)
+    # 3. Planen: Ausführungsplan erstellt (Version 1, einzige Steuerungsquelle)
     t0 = _jetzt()
     plan = planen.plan_erstellen(stufe, endung_konsistent, dateityp=dateityp)
     plaene = [plan]
     _schritt(
-        beleg, "Ausfuehrungsplan erstellt", "ok", "planung",
+        beleg, "Ausführungsplan erstellt", "ok", "planung",
         f"Quellenklasse '{plan.quellenklasse}'. Aktive Werkzeuge: "
         + ", ".join(w.name for w in plan.werkzeuge.values() if w.ausfuehren) or "keine",
         t0, _jetzt(),
@@ -372,7 +372,7 @@ def verarbeite_datei(
         werkzeugschritt = plan.werkzeuge["dokumentart"]
         _schritt(beleg, "Dokumentart bestimmt", "uebersprungen", "keins", werkzeugschritt.begruendung, t0, _jetzt())
 
-    # 5. Bewerten: Vollstaendigkeit geprueft
+    # 5. Bewerten: Vollständigkeit geprüft
     checkliste_vollstaendig: bool | None = None
     if plan.werkzeug_aktiv("checkliste"):
         t0 = _jetzt()
@@ -381,8 +381,8 @@ def verarbeite_datei(
         checkliste_vollstaendig = all(c.erfuellt for c in checkliste)
         erfuellt = sum(1 for c in checkliste if c.erfuellt)
         _schritt(
-            beleg, "Vollstaendigkeit geprueft", "ok", "checkliste-fail-closed",
-            f"{erfuellt}/{len(checkliste)} Checklisten-Punkte erfuellt.",
+            beleg, "Vollständigkeit geprüft", "ok", "checkliste-fail-closed",
+            f"{erfuellt}/{len(checkliste)} Checklisten-Punkte erfüllt.",
             t0, _jetzt(),
         )
     else:
@@ -390,7 +390,7 @@ def verarbeite_datei(
         beleg.checkliste = checkliste
         t0 = _jetzt()
         werkzeugschritt = plan.werkzeuge["checkliste"]
-        _schritt(beleg, "Vollstaendigkeit geprueft", "uebersprungen", "keins", werkzeugschritt.begruendung, t0, _jetzt())
+        _schritt(beleg, "Vollständigkeit geprüft", "uebersprungen", "keins", werkzeugschritt.begruendung, t0, _jetzt())
 
     # 6. Werkzeuge ausfuehren: Bestand abgeglichen. Zuerst der harte
     # Datei-Hash-Vergleich (byte-identisches Duplikat), erst danach der
@@ -546,7 +546,7 @@ def verarbeite_eml(
     plan = planen.plan_erstellen_eml()
     plaene = [plan]
     _container_schritt(
-        "Ausfuehrungsplan erstellt", "ok", "planung",
+        "Ausführungsplan erstellt", "ok", "planung",
         f"Quellenklasse '{plan.quellenklasse}'. Aktive Werkzeuge: "
         + ", ".join(w.name for w in plan.werkzeuge.values() if w.ausfuehren), t0,
     )
@@ -569,11 +569,11 @@ def verarbeite_eml(
     eml = mailparser.zerlegen(inhalt)
     _container_schritt(
         "EML zerlegt", "ok", "mail-parser",
-        f"{len(eml.anhaenge)} Anhaenge gefunden, Textkoerper: {eml.text_quelle}.", t0,
+        f"{len(eml.anhaenge)} Anhänge gefunden, Textkörper: {eml.text_quelle}.", t0,
     )
     speicher.audit_schreiben(
         conn, aktion="EML zerlegt", objekt=anzeigename, alt=None,
-        neu=f"{len(eml.anhaenge)} Anhaenge, Textkoerper: {eml.text_quelle}.",
+        neu=f"{len(eml.anhaenge)} Anhänge, Textkörper: {eml.text_quelle}.",
     )
 
     # 4. Planrevision nach Evidenz: Textkoerper-Einstufung
@@ -582,7 +582,7 @@ def verarbeite_eml(
     )
     if neuer_plan.version != plan.version:
         t0 = _jetzt()
-        _container_schritt("Ausfuehrungsplan aktualisiert", "ok", "planung", neuer_plan.revisionsgrund, t0)
+        _container_schritt("Ausführungsplan aktualisiert", "ok", "planung", neuer_plan.revisionsgrund, t0)
         plaene.append(neuer_plan)
         plan = neuer_plan
 
@@ -640,8 +640,31 @@ def verarbeite_eml(
                 speicher.audit_schreiben(
                     conn, aktion="Review-Aufgabe gesetzt", objekt=beleg.dateiname,
                     alt=alt_aufgabe,
-                    neu=f"{vorgang_modul.AUFGABE_RECHNUNG_ANFORDERN}: Zahlungsbeleg ohne zugehoerige Rechnung im Vorgang.",
+                    neu=f"{vorgang_modul.AUFGABE_RECHNUNG_ANFORDERN}: Zahlungsbeleg ohne zugehörige Rechnung im Vorgang.",
                 )
+
+    # 7b. Vorgangsregel: Abo-Bestaetigung ist keine Rechnung. Die generische
+    # "fehlende Rechnungsfelder"-Meldung der Checkliste (Referenz, Datum,
+    # Zeitraum) ist hier fachlich irrefuehrend -- eine Ankuendigung hat
+    # naturgemaess keine Rechnungsnummer. Ersetzt Begruendung und
+    # Review-Aufgabe durch eine Erklaerung, die ausschliesslich die bereits
+    # ermittelte, evidenzbasierte naechste Aktivitaet nutzt.
+    for beleg in belege:
+        if beleg.dokumentart == DOKUMENTART_ABO_BESTAETIGUNG and beleg.ausgang == AUSGANG_REVIEW:
+            alt_begruendung = beleg.begruendung
+            alt_aufgabe = beleg.review_aufgabe
+            neue_begruendung = vorgang_modul.abo_bestaetigung_begruendung(art, status, datum)
+            neue_aufgabe = vorgang_modul.abo_bestaetigung_review_aufgabe(datum)
+            beleg.begruendung = neue_begruendung
+            beleg.reviewstatus = REVIEWSTATUS_OFFEN
+            beleg.review_aufgabe = neue_aufgabe
+            speicher.beleg_review_setzen(
+                conn, beleg.id, REVIEWSTATUS_OFFEN, neue_aufgabe, begruendung=neue_begruendung
+            )
+            speicher.audit_schreiben(
+                conn, aktion="Review-Aufgabe gesetzt", objekt=beleg.dateiname,
+                alt=f"{alt_begruendung} / {alt_aufgabe}", neu=f"{neue_begruendung} / {neue_aufgabe}",
+            )
 
     # 8. Erinnern: Vorgang, Plaene und Schritte speichern
     speicher.vorgang_speichern(conn, vorgang)

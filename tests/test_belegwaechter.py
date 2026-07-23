@@ -183,8 +183,8 @@ class AuditUndProvenienzTest(IsolierteDatenbankTestCase):
         schritte = speicher.agent_schritte_fuer_lauf(self.conn, lauf_id)
         namen = [s["schritt"] for s in schritte]
         erwartete_schritte = [
-            "Eingang erkannt", "Quellenqualitaet bewertet", "Ausfuehrungsplan erstellt",
-            "Felder extrahiert", "Dokumentart bestimmt", "Vollstaendigkeit geprueft",
+            "Eingang erkannt", "Quellenqualität bewertet", "Ausführungsplan erstellt",
+            "Felder extrahiert", "Dokumentart bestimmt", "Vollständigkeit geprüft",
             "Bestand abgeglichen", "Abovergleich bewertet", "Entscheidung getroffen",
             "Ergebnis gespeichert", "Auditverlauf aktualisiert",
         ]
@@ -453,7 +453,7 @@ class BaselineTest(IsolierteDatenbankTestCase):
         dritter = agent.verarbeite_datei(self.conn, lauf, "schreibki_august.pdf", dritte_rechnung)
 
         self.assertEqual(dritter.ausgang, AUSGANG_UEBERNOMMEN)
-        self.assertIn("unveraendert", dritter.radar_hinweis)
+        self.assertIn("unverändert", dritter.radar_hinweis)
         self.assertIn("05.06.2026", dritter.radar_hinweis, "Vergleich muss gegen die bestaetigte Monats-Baseline laufen")
         self.assertNotIn("05.07.2026", dritter.radar_hinweis, "Der offene Jahresbeleg darf nie als Referenz dienen")
         self.assertNotIn("120,00", dritter.radar_hinweis)
@@ -1208,6 +1208,33 @@ class EmlVorgangTest(IsolierteDatenbankTestCase):
         self.assertEqual(vorgang_obj.naechste_aktivitaet_datum, "05.08.2026")
         self.assertEqual(belege[0].dokumentart, "abo_bestaetigung")
 
+    def test_abo_bestaetigung_begruendung_ist_fachlich_konkret_statt_generische_checkliste(self):
+        """Eine Abo-Bestaetigung ist keine Rechnung: die sichtbare Begruendung
+        darf nicht die generische 'fehlende Rechnungsfelder'-Liste sein,
+        sondern muss Abo/Verlaengerung, die bestaetigte naechste Zahlung und
+        das Fehlen einer Rechnung konkret benennen -- ohne Steuer- oder
+        Compliance-Zusage."""
+        _, belege = agent.verarbeite_eml(
+            self.conn, speicher.neuer_lauf(self.conn),
+            "schreibki_abo_bestaetigung.eml", _lesen("schreibki_abo_bestaetigung.eml"),
+        )
+        beleg = belege[0]
+        self.assertNotIn("folgende Punkte sind nicht eindeutig erfüllt", beleg.begruendung)
+        self.assertNotIn("Fehlende Angaben ergänzen", beleg.review_aufgabe or "")
+        self.assertIn("Abo", beleg.begruendung)
+        self.assertIn("Verlängerung", beleg.begruendung)
+        self.assertIn("bestätigt", beleg.begruendung)
+        self.assertIn("05.08.2026", beleg.begruendung)
+        self.assertIn("noch keine Rechnung", beleg.begruendung)
+        self.assertIn("Rechnung zum Zahlungstermin", beleg.review_aufgabe)
+        self.assertEqual(beleg.reviewstatus, REVIEWSTATUS_OFFEN)
+        for verbotenes_wort in ("Steuer", "Finanzamt", "konform", "GoBD"):
+            self.assertNotIn(verbotenes_wort, beleg.begruendung)
+
+        gespeichert = speicher.alle_belege(self.conn)[0]
+        self.assertEqual(gespeichert["begruendung"], beleg.begruendung)
+        self.assertEqual(gespeichert["review_aufgabe"], beleg.review_aufgabe)
+
 
 class HashDuplikatTest(IsolierteDatenbankTestCase):
     def test_erneuter_upload_desselben_anhangs_ist_datei_duplikat(self):
@@ -1276,13 +1303,13 @@ class NaechsteAktivitaetTest(unittest.TestCase):
             ["Ihr Abo verlaengert sich am 05.08.2026."]
         )
         self.assertEqual((art, status, datum), ("zahlung", "bestaetigt", "05.08.2026"))
-        self.assertIn("bestaetigt", begruendung)
+        self.assertIn("bestätigt", begruendung)
 
     def test_leistungszeitraum_ist_hoechstens_erwarteter_beleg(self):
         art, status, datum, begruendung = vorgang.naechste_aktivitaet(["01.08.2026 - 31.08.2026"])
         self.assertEqual((art, status, datum), ("beleg", "erwartet", "31.08.2026"))
         self.assertNotEqual(status, "bestaetigt")
-        self.assertIn("keine Aussage ueber eine sichere naechste Zahlung", begruendung)
+        self.assertIn("keine Aussage über eine sichere nächste Zahlung", begruendung)
 
     def test_verlaengerungsdatum_hat_vorrang_vor_zeitraum(self):
         art, status, datum, _ = vorgang.naechste_aktivitaet(
@@ -1384,6 +1411,52 @@ class ResetRaceTest(IsolierteDatenbankTestCase):
             t.join(timeout=15)
         self.conn = speicher.verbindung()
         self.assertEqual(fehler, [], "Parallele Erstanlage nach Reset darf nie scheitern")
+
+
+class DetailSchritteEingeklapptTest(unittest.TestCase):
+    """Agentenschritte sind standardmaessig eingeklappt, der Agentenplan
+    bleibt direkt sichtbar; keine ID- oder Logikaenderung."""
+
+    def test_agentenschritte_stehen_in_details_ohne_open(self):
+        html = (REPO_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
+        treffer = re.search(
+            r'<details class="schritte-details">\s*<summary>Agentenschritte</summary>\s*'
+            r'<ul id="detail-schritte" class="audit-liste"></ul>\s*</details>',
+            html,
+        )
+        self.assertIsNotNone(treffer, "Agentenschritte muessen in einem geschlossenen <details> stehen")
+        self.assertIn('id="detail-plan"', html, "Agentenplan bleibt ausserhalb von <details> direkt sichtbar")
+
+
+class RadarLeereElementeTest(IsolierteDatenbankTestCase):
+    """Regressionsschutz: Ist der Abovergleich fuer den juengsten Beleg eines
+    Anbieters bewusst deaktiviert (z.B. weil er ein Zahlungsbeleg ist), darf
+    das Abo-Radar keinen leeren Badge und keine leere Begruendungsflaeche
+    rendern -- der Radarstatus wird nie erfunden."""
+
+    def test_juengster_beleg_ohne_radar_einschaetzung_liefert_null_statt_erfundenem_wert(self):
+        agent.verarbeite_eml(
+            self.conn, speicher.neuer_lauf(self.conn),
+            "cloudbasis_rechnung_und_zahlung.eml", _lesen("cloudbasis_rechnung_und_zahlung.eml"),
+        )
+        radar = speicher.radar_uebersicht(self.conn)
+        self.assertEqual(len(radar), 1)
+        self.assertIsNone(radar[0]["radar_einschaetzung"], "Kein erfundener Radarstatus fuer einen Zahlungsbeleg")
+        self.assertIsNone(radar[0]["radar_begruendung"])
+
+    def test_app_js_rendert_badge_und_begruendung_nur_bei_vorhandenem_wert(self):
+        js = (REPO_ROOT / "web" / "static" / "app.js").read_text(encoding="utf-8")
+        treffer = re.search(r"function renderRadar\(radar\) \{.*?\n\}\n", js, re.DOTALL)
+        self.assertIsNotNone(treffer, "renderRadar() nicht gefunden")
+        rumpf = treffer.group(0)
+        self.assertRegex(
+            rumpf, r"const eintrag = RADAR_LABEL\[r\.einschaetzung\];\s*\n\s*if \(eintrag\)",
+            "Badge darf nur erzeugt werden, wenn eine echte Radar-Einschaetzung vorliegt",
+        )
+        self.assertRegex(
+            rumpf, r"if \(r\.begruendung\) \{",
+            "Begruendungsflaeche darf nur bei vorhandenem Begruendungstext erzeugt werden",
+        )
 
 
 class ModalSichtbarkeitTest(unittest.TestCase):

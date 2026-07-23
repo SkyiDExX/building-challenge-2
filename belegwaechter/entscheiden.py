@@ -89,14 +89,14 @@ def entscheiden(
         fehlend = ", ".join(fehlende_punkte(checkliste))
         return (
             AUSGANG_REVIEW,
-            f"Bitte ansehen: folgende Punkte sind nicht eindeutig erfuellt: "
+            f"Bitte ansehen: folgende Punkte sind nicht eindeutig erfüllt: "
             f"{fehlend}.",
             None,
         )
 
     return (
         AUSGANG_UEBERNOMMEN,
-        f"Uebernommen: alle {len(checkliste)} Checklisten-Punkte erfuellt, "
+        f"Übernommen: alle {len(checkliste)} Checklisten-Punkte erfüllt, "
         "Original vorhanden.",
         None,
     )

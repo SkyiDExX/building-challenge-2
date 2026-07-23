@@ -30,6 +30,7 @@ _MUSTER_VERLAENGERUNG = re.compile(
 _MUSTER_ZEITRAUM_VON_BIS = re.compile(r"\d{2}\.\d{2}\.\d{4}\s*-\s*(\d{2}\.\d{2}\.\d{4})")
 
 AUFGABE_RECHNUNG_ANFORDERN = "Rechnung oder Originalbeleg anfordern"
+AUFGABE_RECHNUNG_ZUM_ZAHLUNGSTERMIN_NACHVERFOLGEN = "Rechnung zum Zahlungstermin nachverfolgen"
 
 
 def naechste_aktivitaet(texte: list[str]) -> tuple[str | None, str, str | None, str]:
@@ -44,7 +45,7 @@ def naechste_aktivitaet(texte: list[str]) -> tuple[str | None, str, str | None, 
             AKTIVITAET_ART_ZAHLUNG,
             AKTIVITAET_BESTAETIGT,
             datum,
-            f"Naechste Zahlung bestaetigt: explizites Verlaengerungsdatum {datum} im Dokument genannt.",
+            f"Nächste Zahlung bestätigt: explizites Verlängerungsdatum {datum} im Dokument genannt.",
         )
 
     treffer_zeitraum = _MUSTER_ZEITRAUM_VON_BIS.search(gesamt)
@@ -54,16 +55,40 @@ def naechste_aktivitaet(texte: list[str]) -> tuple[str | None, str, str | None, 
             AKTIVITAET_ART_BELEG,
             AKTIVITAET_ERWARTET,
             bis_datum,
-            f"Naechster Beleg erwartet: Leistungszeitraum bis {bis_datum} erkannt. "
-            "Das ist keine Aussage ueber eine sichere naechste Zahlung.",
+            f"Nächster Beleg erwartet: Leistungszeitraum bis {bis_datum} erkannt. "
+            "Das ist keine Aussage über eine sichere nächste Zahlung.",
         )
 
     return (
         None,
         AKTIVITAET_UNBEKANNT,
         None,
-        "Naechste Aktivitaet unbekannt: weder Verlaengerungsdatum noch Leistungszeitraum erkannt.",
+        "Nächste Aktivität unbekannt: weder Verlängerungsdatum noch Leistungszeitraum erkannt.",
     )
+
+
+def abo_bestaetigung_begruendung(art: str | None, status: str, datum: str | None) -> str:
+    """Fachliche Erklaerung fuer ein Dokument der Dokumentart
+    abo_bestaetigung: keine Rechnung, sondern eine Ankuendigung. Nutzt
+    ausschliesslich die bereits am Vorgang ermittelte, evidenzbasierte
+    naechste Aktivitaet -- erfindet nichts Neues. Keine Steuer- oder
+    Compliance-Aussage."""
+    if art == AKTIVITAET_ART_ZAHLUNG and status == AKTIVITAET_BESTAETIGT and datum:
+        return (
+            f"Abo und Verlängerung erkannt. Nächste Zahlung bestätigt für {datum}, "
+            "weil das Verlängerungsdatum explizit genannt wurde. Es liegt noch keine "
+            "Rechnung vor."
+        )
+    return (
+        "Abo-Bestätigung erkannt, aber ohne explizites Verlängerungsdatum. "
+        "Es liegt noch keine Rechnung vor."
+    )
+
+
+def abo_bestaetigung_review_aufgabe(datum: str | None) -> str:
+    if datum:
+        return f"{AUFGABE_RECHNUNG_ZUM_ZAHLUNGSTERMIN_NACHVERFOLGEN} ({datum})"
+    return AUFGABE_RECHNUNG_ZUM_ZAHLUNGSTERMIN_NACHVERFOLGEN
 
 
 def rechnung_fehlt(belege: list[Beleg]) -> bool:

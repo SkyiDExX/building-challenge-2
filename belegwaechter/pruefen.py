@@ -18,10 +18,10 @@ def checkliste_pruefen(beleg: Beleg, text_lesbar: bool) -> list[Checkpunkt]:
     return [
         Checkpunkt("Anbieter erkannt", hat("anbieter")),
         Checkpunkt("Datum erkannt", hat("datum")),
-        Checkpunkt("Betrag und Waehrung erkannt", betrag_lesbar and hat("waehrung")),
+        Checkpunkt("Betrag und Währung erkannt", betrag_lesbar and hat("waehrung")),
         Checkpunkt("Rechnungsnummer vorhanden", hat("referenz")),
         Checkpunkt("Zeitraum eindeutig", hat("zeitraum")),
-        Checkpunkt("Dokument vollstaendig lesbar", text_lesbar),
+        Checkpunkt("Dokument vollständig lesbar", text_lesbar),
     ]
 
 

@@ -23,7 +23,7 @@ _NUTZERMELDUNGEN = {
     FEHLERCODE_PDF_UNLESBAR: "Diese PDF konnte nicht gelesen werden. Bitte das Original erneut ablegen.",
     FEHLERCODE_PDF_OHNE_TEXT: "In dieser PDF ist keine Textebene vorhanden.",
     FEHLERCODE_MAILTEXT_LEER: "Im Mailtext wurde kein lesbarer Inhalt gefunden.",
-    FEHLERCODE_DATEI_ZU_GROSS: "Die Datei ueberschreitet die zulaessige Groesse.",
+    FEHLERCODE_DATEI_ZU_GROSS: "Die Datei überschreitet die zulässige Größe.",
     FEHLERCODE_PFAD_UNSICHER: "Der Dateiname wurde abgelehnt.",
     FEHLERCODE_PFAD_NICHT_AUFLOESBAR: "Die Quelldatei ist nicht mehr auffindbar. Bitte das Original erneut ablegen.",
     FEHLERCODE_SIGNATUR_WIDERSPRUCH: "Dateiendung und Dateiinhalt passen nicht zusammen.",

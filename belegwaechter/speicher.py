@@ -521,14 +521,24 @@ def vorgaenge_liste(conn: sqlite3.Connection) -> list[dict]:
 
 
 def beleg_review_setzen(
-    conn: sqlite3.Connection, beleg_id: str, reviewstatus: str, review_aufgabe: str
+    conn: sqlite3.Connection, beleg_id: str, reviewstatus: str, review_aufgabe: str,
+    begruendung: str | None = None,
 ) -> None:
     """Setzt eine offene Pruefaufgabe nachtraeglich, z.B. wenn erst auf
-    Vorgangsebene sichtbar wird, dass die Rechnung zum Zahlungsbeleg fehlt."""
-    conn.execute(
-        "UPDATE belege SET reviewstatus = ?, review_aufgabe = ? WHERE id = ?",
-        (reviewstatus, review_aufgabe, beleg_id),
-    )
+    Vorgangsebene sichtbar wird, dass die Rechnung zum Zahlungsbeleg fehlt,
+    oder wenn eine Dokumentart (Abo-Bestaetigung) eine fachlich konkretere
+    Begruendung als die generische Checklisten-Luecke braucht. begruendung
+    wird nur aktualisiert, wenn uebergeben."""
+    if begruendung is not None:
+        conn.execute(
+            "UPDATE belege SET reviewstatus = ?, review_aufgabe = ?, begruendung = ? WHERE id = ?",
+            (reviewstatus, review_aufgabe, begruendung, beleg_id),
+        )
+    else:
+        conn.execute(
+            "UPDATE belege SET reviewstatus = ?, review_aufgabe = ? WHERE id = ?",
+            (reviewstatus, review_aufgabe, beleg_id),
+        )
     conn.commit()
 
 

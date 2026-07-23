@@ -190,13 +190,22 @@ function renderRadar(radar) {
     const rechts = document.createElement("span");
     rechts.className = "radar-betrag";
     rechts.textContent = r.betrag ? `${r.betrag} ${r.waehrung || ""} ` : "";
-    const [label, klasse] = RADAR_LABEL[r.einschaetzung] || [r.einschaetzung, "badge-quelle"];
-    rechts.appendChild(badge(label, klasse));
+    // r.einschaetzung ist null, wenn der Abovergleich fuer diesen Beleg
+    // bewusst deaktiviert war (z.B. juengster Beleg des Anbieters ist ein
+    // Zahlungsbeleg, kein Rechnungsvergleich). Dann keinen Badge erfinden.
+    const eintrag = RADAR_LABEL[r.einschaetzung];
+    if (eintrag) {
+      const [label, klasse] = eintrag;
+      rechts.appendChild(badge(label, klasse));
+    }
     z1.append(name, rechts);
-    const beg = document.createElement("div");
-    beg.className = "radar-begruendung";
-    beg.textContent = r.begruendung;
-    li.append(z1, beg);
+    li.appendChild(z1);
+    if (r.begruendung) {
+      const beg = document.createElement("div");
+      beg.className = "radar-begruendung";
+      beg.textContent = r.begruendung;
+      li.appendChild(beg);
+    }
     liste.appendChild(li);
   });
 }

@@ -33,7 +33,7 @@ MAX_ANFRAGE_BYTES = 20 * 1024 * 1024  # gesamte HTTP-Anfrage
 MAX_DATEI_BYTES = 10 * 1024 * 1024  # einzelne Datei
 MAX_DATEIEN_JE_CHARGE = 25
 
-_ZUGRIFF_VERWEIGERT = {"fehler": "Zugriff nur von der lokalen Oberflaeche erlaubt."}
+_ZUGRIFF_VERWEIGERT = {"fehler": "Zugriff nur von der lokalen Oberfläche erlaubt."}
 
 
 class AnfrageZuGrossFehler(ValueError):
@@ -112,7 +112,7 @@ def _lese_multipart(handler: "BelegwaechterHandler") -> list[tuple[str, bytes]]:
     laenge = int(handler.headers.get("Content-Length", "0"))
     if laenge > MAX_ANFRAGE_BYTES:
         _rumpf_verwerfen(handler.rfile, laenge)
-        raise AnfrageZuGrossFehler("Anfrage ueberschreitet die zulaessige Gesamtgroesse.")
+        raise AnfrageZuGrossFehler("Anfrage überschreitet die zulässige Gesamtgröße.")
     rohdaten = handler.rfile.read(laenge)
 
     teile = rohdaten.split(b"--" + boundary)
@@ -317,11 +317,11 @@ class BelegwaechterHandler(BaseHTTPRequestHandler):
             gesamtgroesse = 0
             for _, inhalt in dateien_liste:
                 if len(inhalt) > MAX_DATEI_BYTES:
-                    self._json(413, {"fehler": "Eine Datei ueberschreitet die zulaessige Groesse."})
+                    self._json(413, {"fehler": "Eine Datei überschreitet die zulässige Größe."})
                     return
                 gesamtgroesse += len(inhalt)
             if gesamtgroesse > MAX_ANFRAGE_BYTES:
-                self._json(413, {"fehler": "Die Anfrage ueberschreitet die zulaessige Gesamtgroesse."})
+                self._json(413, {"fehler": "Die Anfrage überschreitet die zulässige Gesamtgröße."})
                 return
 
             conn = speicher.verbindung()

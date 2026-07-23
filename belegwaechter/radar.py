@@ -47,7 +47,7 @@ def radar_bewerten(beleg: Beleg, vorheriger: dict | None) -> RadarEintrag:
     if (beleg.feldwert("tarif") or "") != (vorheriger.get("tarif") or ""):
         abweichungen.append("Tarif")
     if (beleg.feldwert("waehrung") or "") != (vorheriger.get("waehrung") or ""):
-        abweichungen.append("Waehrung")
+        abweichungen.append("Währung")
     if (beleg.feldwert("zeitraum") or "") != (vorheriger.get("zeitraum") or ""):
         abweichungen.append("Abrechnungszeitraum")
 
@@ -83,8 +83,8 @@ def radar_bewerten(beleg: Beleg, vorheriger: dict | None) -> RadarEintrag:
             letzter_betrag=betrag_anzeige,
             einschaetzung=RADAR_STABIL,
             begruendung=(
-                f"{betrag_anzeige} unveraendert seit dem Beleg vom "
-                f"{vorheriger.get('datum')}, gleicher Tarif, gleiche Waehrung, "
+                f"{betrag_anzeige} unverändert seit dem Beleg vom "
+                f"{vorheriger.get('datum')}, gleicher Tarif, gleiche Währung, "
                 "gleicher Zeitraum."
             ),
         )
@@ -97,7 +97,7 @@ def radar_bewerten(beleg: Beleg, vorheriger: dict | None) -> RadarEintrag:
         einschaetzung=RADAR_VERAENDERT_EINDEUTIG,
         begruendung=(
             f"{vorheriger.get('betrag')} → {betrag} {waehrung} seit "
-            f"{vorheriger.get('datum')}, gleicher Tarif, gleiche Waehrung, "
+            f"{vorheriger.get('datum')}, gleicher Tarif, gleiche Währung, "
             f"gleicher Zeitraum. Vergleich eindeutig: {richtung} geworden."
         ),
     )

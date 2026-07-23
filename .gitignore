@@ -1,14 +1,62 @@
 # Secrets — API-Keys NIEMALS committen
 .env
+.env.*
+!.env.example
 *.key
+*.pem
 credentials*.json
+secrets*
 
-# Abhängigkeiten / Umgebungen
-node_modules/
+# Laufzeitdaten — enthalten potenziell hochgeladene Belege, NIE committen
+runtime/
+uploads/
+eingang/
+*.db
+*.sqlite
+*.sqlite3
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Generierte Exporte und Berichte
+export*.csv
+exports/
+reports/
+
+# Logs und Cache
+*.log
+logs/
+.cache/
+tmp/
+temp/
+
+# Testartefakte und Coverage
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+test-results/
+
+# Python
+__pycache__/
+*.pyc
 .venv/
 venv/
-__pycache__/
+
+# Node
+node_modules/
+
+# Demo-Aufnahmen und temporäre Screenshots
+*.mp4
+*.mov
+*.webm
+screenshots/
+aufnahmen/
 
 # System
 .DS_Store
-*.log
+Thumbs.db
+
+# Ausnahme: synthetische, bewusst getrackte Demo-Belege
+!fixtures/
+!fixtures/**

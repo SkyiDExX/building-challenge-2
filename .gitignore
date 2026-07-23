@@ -60,3 +60,4 @@ Thumbs.db
 # Ausnahme: synthetische, bewusst getrackte Demo-Belege
 !fixtures/
 !fixtures/**
+fixtures/**/__pycache__/

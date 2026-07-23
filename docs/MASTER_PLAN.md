@@ -266,7 +266,39 @@ Drei synthetische Text-PDFs und zwei synthetische Screenshots werden lokal erzeu
 | G5: Demo-Stabilität | Sa 25.07. 20:00 | 3 fehlerfreie Proben? sonst Demo kürzen |
 | G6: Abgabe-Cut | So 26.07. 11:30 | Stand einfrieren, nur noch Abgabe-Handgriffe |
 
+## 30a. Produktklarstellung: Zentrale manuelle Kosten-Inbox (Arbeitsblock 3, 24.07.2026)
+
+Der Academy-MVP besitzt **eine zentrale, manuelle Kosten-Inbox**: Der Mensch führt Belege über eine Upload-Fläche zu (Zuführung ist manuell), die Verarbeitung danach läuft vollständig agentisch und autonom (Wahrnehmen, Planen, Werkzeuge ausführen, Bewerten, Handeln, Erklären, Erinnern; siehe Abschnitt 7 und 32). Fokus des MVP: geschäftliche Kosten mit Beleg oder Erfassungsnachweis. Spätere Eingangsadapter (Mail-Wache, mobile Teilen-Funktion, Bankintegration, Claude-Chat, Optifyx-Anbindung) sind dokumentiert (Abschnitt 6), aber in diesem Slice nicht implementiert.
+
+Verbindliches Produktversprechen (ergänzt, ersetzt Formulierung in Abschnitt 2 nicht, präzisiert sie für die Mehrformat-Eingabe): "Belege und Kostennachweise aus unterschiedlichen Quellen hinein. Der Belegwächter prüft, ordnet und verfolgt sie selbstständig bis zum nachvollziehbaren Monatspaket." Weiterhin keine Steuerberatung, keine rechtliche Sicherheit, keine Compliance-Zusage.
+
+Regeln für diesen Slice (verbindlich):
+1. Textbasierte PDF-Dateien sind bevorzugte Originalquellen (siehe Gate-Ergebnis, `FEASIBILITY_INPUTS.md`).
+2. EML wird in diesem Slice nicht implementiert (Kürzungsreihenfolge Punkt 1), aber als späterer Adapter dokumentiert.
+3. PNG/JPG werden angenommen und korrekt klassifiziert (Magic-Bytes, stdlib).
+4. Automatische Feldextraktion aus Bildern nur bei bestandenem OCR-Gate — hier nicht bestanden (kein lokales OCR-Werkzeug ohne systemweite Installation).
+5. Scheitert OCR oder ist Konfidenz zu niedrig: Bild wird nicht abgelehnt, sondern als Erfassungsnachweis mit Review-Aufgabe gespeichert.
+6. Ein Screenshot ist niemals automatisch der unveränderte Originalbeleg (durchgängig im Statusmodell verankert: `original_vorhanden` vs. `erfassungsnachweis`).
+7. Bestellbestätigungen/Zahlungsbestätigungen ohne Rechnung erhalten `beleg_fehlt` oder `original_anfordern`, nie `uebernommen`.
+8. Keine Kostenposition wird ohne Evidenz als geprüft dargestellt; jede Entscheidung verweist auf die konkrete Evidenz (Checklisten-Ergebnis, Vergleichsbestand).
+
+## 30b. Agent-Zyklus (Wahrnehmen–Planen–Ausführen–Bewerten–Handeln–Erklären–Erinnern)
+
+Der Belegwächter ist kein fester Parser-Ablauf, sondern durchläuft pro Eingang einen zustandsabhängigen Zyklus mit unterschiedlichen Ausgängen je nach Evidenzlage:
+
+1. **Wahrnehmen:** Quelle/Dateityp erkennen (Magic-Bytes), Hash bilden, Quellenqualität bestimmen (Stufe A/B/C), Original vs. Erfassungsnachweis unterscheiden.
+2. **Planen:** je nach Stufe wird ein anderer Werkzeugpfad gewählt — Stufe A bekommt vollständige Extraktion plus Checkliste plus Bestandsabgleich; Stufe B bekommt nur Klassifizierung plus sofortige Review-Aufgabe (Extraktionswerkzeuge werden bewusst übersprungen, da das Gate nicht bestanden ist); fehlende Evidenz wird hier schon erkannt, nicht erst am Ende.
+3. **Werkzeuge ausführen:** Textextraktion (nur Stufe A), Feldstrukturierung, Vollständigkeitsprüfung (fail-closed), Bestandsabgleich (Dublettenprüfung über Referenz+Betrag+Datum), Abo-/Preisvergleich (nur bei vorhandener Historie und vergleichbaren Dimensionen).
+4. **Bewerten:** Evidenz, Unsicherheit und Widersprüche werden zusammengeführt; kein Wert wird erfunden — fehlt eine Angabe, bleibt sie `None` und fließt als Unsicherheit in die Entscheidung ein.
+5. **Handeln:** genau eine Entscheidung — Übernehmen, Dublette markieren, Review-Aufgabe erstellen, Original anfordern — plus Abo-Radar-Aktualisierung, wenn ein wiederkehrender Anbieter betroffen ist.
+6. **Erklären:** die Entscheidung wird als konkreter, fallspezifischer Begründungssatz gespeichert und angezeigt (kein generischer Text).
+7. **Erinnern:** Bestand (Belege, Anbieter-Historie), Auditverlauf und Quellenverweise werden fortgeschrieben und stehen dem nächsten Lauf als Vergleichsgrundlage zur Verfügung.
+
+Warum das ein Agent ist und kein reiner Parser: Der Ablauf verzweigt abhängig vom Zustand (Stufe, vorhandene Historie, Vergleichbarkeit) in unterschiedliche Pfade und trifft unterschiedliche, fallspezifisch begründete Entscheidungen — ein reiner Parser würde für jede Datei denselben Ablauf mit derselben Art Ausgabe durchlaufen.
+
 ## 30. Recherche-Quellen (Abruf 23.07.2026)
+
+Hinweis: Abschnitte 30a und 30b unten wurden in Arbeitsblock 3 ergänzt und bewusst nicht in die fortlaufende Zählung 31ff. eingereiht, um bestehende Verweise auf Abschnitt 30 (Recherche-Quellen) stabil zu halten.
 
 Kontextwissen, bewusst ohne Rechts- oder Steuerberatungsaussagen; Produktseiten sind Marketing und wurden nur als Feature-Landschaft gewertet:
 

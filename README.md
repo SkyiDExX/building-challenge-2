@@ -1,39 +1,94 @@
 # Belegwächter — SKAILE Building Challenge #2
 
-> Stand Tag 1 (23.07.2026): Agenten-Discovery abgeschlossen. Aus fünf
-> Kandidaten wurde der Belegwächter gewählt (Bewertung und Begründung in
-> `docs/decision-01-agent-selection.md`). Implementierung startet nach
-> Freigabe des MVP-Plans.
+> Stand Arbeitsblock 3 (24.07.2026): Erster echter End-to-End-Vertical-Slice
+> läuft. Zentrale, manuelle Kosten-Inbox: Belege werden manuell zugeführt,
+> die Verarbeitung danach läuft vollständig agentisch und autonom.
 
 ## Das Problem
 
-Als Solo-Founder kommen Rechnungen und Belege verstreut an (Mail, PDF,
-Screenshot) und landen unsortiert in Ordnern. Abos und deren Preiserhöhungen
-bleiben unbemerkt, und vor Steuerterminen kostet das Aufräumen Stunden und
-Nerven.
+Als Solo-Founder kommen Rechnungen und Kostennachweise verstreut an (PDF,
+Screenshot, Foto) und landen unsortiert in Ordnern. Abos und deren
+Preisänderungen bleiben unbemerkt, und vor Steuerterminen kostet das
+Aufräumen Stunden und Nerven.
 
 ## Was der Agent macht
 
-Belege in einen Eingangsordner legen, fertig. Der Agent liest jeden Beleg,
-prüft ihn auf Vollständigkeit, gleicht ihn mit dem Bestand ab (Dublette?
-bekanntes Abo? Preis gestiegen?) und entscheidet mit Begründung: in das
-vorbereitete Belegpaket übernehmen oder zur Prüfung vorlegen. Heraus kommt ein geprüftes,
-nachvollziehbares und buchhaltungsvorbereitendes Belegpaket, dazu ein
-Abo-Radar, das wiederkehrende Kosten und Preiserhöhungen sichtbar macht.
+Belege und Kostennachweise aus unterschiedlichen Quellen hinein. Der
+Belegwächter prüft, ordnet und verfolgt sie selbstständig bis zum
+nachvollziehbaren Monatspaket: Datei erkennen, Quellenqualität bewerten,
+bei PDFs die Felder lesen, fail-closed auf Vollständigkeit prüfen, gegen den
+Bestand abgleichen (Dublette? bekanntes Abo? Preis eindeutig vergleichbar?)
+und mit konkreter Begründung entscheiden: in das vorbereitete Belegpaket
+übernehmen, als Dublette aussortieren, oder zur Prüfung mit "Original
+anfordern" vorlegen. Dazu ein erklärbares Abo-Radar, das wiederkehrende
+Kosten und Preisänderungen sichtbar macht, nur wenn der Vergleich wirklich
+eindeutig ist.
 
-Hinweis: Der Agent gibt keine Steuerberatung und verspricht keine rechtliche
-Konformität. Er bereitet Belege strukturiert und nachvollziehbar vor.
+Hinweis: Der Agent gibt keine Steuerberatung und verspricht keine
+finanzamtkonforme oder GoBD-konforme Prüfung. Er bereitet Belege strukturiert
+und nachvollziehbar vor, geprüft nach interner Checkliste.
 
 ## Stack
 
 - [x] Claude Code (Agent / Skills)
 - [ ] n8n
-- [x] Sonstiges: Python (lokaler Verarbeitungskern), SQLite (lokale Ablage)
+- [x] Sonstiges: Python (lokaler Verarbeitungskern + `pypdf`), SQLite (lokale Ablage), reine Standardbibliothek für den Web-Server
 
 ## Setup
 
-Folgt mit dem ersten Vertical Slice. Geplant ist eine an Claude adressierte
-INSTALL.md.
+Siehe `INSTALL.md` (an Claude adressiert). Kurzfassung:
+```
+python -m venv .venv
+.venv\Scripts\python.exe -m pip install -r requirements.txt
+.venv\Scripts\python.exe web\server.py
+```
+Dann `http://127.0.0.1:8850` öffnen und die Dateien aus `fixtures/` auf die
+Upload-Fläche ziehen.
+
+## Tatsächlich unterstützte Eingänge (ehrliche Fähigkeits-Matrix)
+
+Ergebnis des Feasibility-Gates, siehe `docs/FEASIBILITY_INPUTS.md`.
+
+| Format | Was der Agent wirklich tut |
+|---|---|
+| PDF mit Textebene | Vollständige, deterministische Extraktion (`pypdf`), Checkliste, Bestandsabgleich, Abo-Radar |
+| PNG / JPG | Wird angenommen und per Dateisignatur korrekt klassifiziert. Keine automatische Feldextraktion (OCR-Gate nicht bestanden, kein lokales OCR-Werkzeug ohne systemweite Installation) — landet immer in Review mit "Original angefordert" |
+| EML | In diesem Slice nicht implementiert (Kürzungsreihenfolge, siehe MASTER_PLAN) |
+| Beschädigte/unlesbare PDF | Wird erkannt und ehrlich als "fehlgeschlagen" gemeldet, nichts wird erfunden |
+
+Welche Entscheidungen sind regelbasiert und welche heuristisch: Dateityp-
+Erkennung ist regelbasiert (Magic-Bytes). Feldextraktion aus PDF ist
+regelbasiert (Zeilenmuster für "Label: Wert"-Rechnungen, kein allgemeiner
+Rechnungs-Parser für beliebige Layouts). Checkliste ist regelbasiert
+(fail-closed). Dublettenerkennung ist regelbasiert (Referenz+Betrag+Datum).
+Abo-Vergleich ist regelbasiert auf den vier extrahierten Dimensionen
+(Anbieter, Tarif, Währung, Zeitraum) — Menge/Seats, Netto/Brutto und
+Rabatt/Gutschrift werden in diesem Slice nicht separat geprüft, da keine
+Fixture sie variiert (siehe `belegwaechter/radar.py`).
+
+## Warum das ein Agent ist, kein Parser
+
+Der Ablauf verzweigt je nach Zustand: Stufe A bekommt volle Extraktion,
+Stufe B wird bewusst übersprungen und direkt in Review geroutet. Ob ein
+Preis "eindeutig teurer", "Vergleich erforderlich" oder "erste Erfassung"
+ist, hängt vom vorhandenen Bestand ab, nicht von einer festen Regel pro
+Datei. Jeder Lauf erzeugt einen echten, protokollierten Schritteverlauf
+(10 Schritte je Beleg: Wahrnehmen, Planen, Werkzeuge ausführen, Bewerten,
+Handeln, Erklären, Erinnern — Details in `docs/MASTER_PLAN.md` Abschnitt 30b).
+Für dieselbe Datei kann die Entscheidung unterschiedlich ausfallen, je
+nachdem was vorher schon verarbeitet wurde.
+
+## Bekannte Einschränkungen (Stand Arbeitsblock 3)
+
+- Feldextraktion aus PDF ist musterbasiert für "Label: Wert"-Zeilen, kein
+  allgemeiner Rechnungs-Parser für beliebige reale Rechnungslayouts.
+- Bild-OCR ist nicht aktiviert (siehe Feasibility-Gate); Bilder werden immer
+  in Review geroutet.
+- Radar-Zustand "Beleg fehlt" (erwarteter, aber nicht eingegangener
+  wiederkehrender Beleg) ist im Datenmodell vorgesehen, wird aber von den
+  aktuellen Demo-Fixtures nicht ausgelöst.
+- Kein Mehrbenutzer-/Mandantenbetrieb, keine Mail-Anbindung, kein
+  Bank-Abgleich (bewusste Nicht-Ziele, siehe MASTER_PLAN Abschnitt 12).
 
 ## Was während der Challenge entstanden ist
 

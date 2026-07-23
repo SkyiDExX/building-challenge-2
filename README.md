@@ -1,35 +1,39 @@
-# SKAILE Building Challenge — Building Challenge #2
+# Belegwächter — SKAILE Building Challenge #2
 
-> Stand Tag 1 (23.07.2026): Dieses Projekt befindet sich in einer kurzen,
-> zeitlich begrenzten Agenten-Discovery. Der finale Agent ist noch nicht
-> gewählt. Diese README wird nach der Entscheidung aktualisiert.
+> Stand Tag 1 (23.07.2026): Agenten-Discovery abgeschlossen. Aus fünf
+> Kandidaten wurde der Belegwächter gewählt (Bewertung und Begründung in
+> `docs/decision-01-agent-selection.md`). Implementierung startet nach
+> Freigabe des MVP-Plans.
 
 ## Das Problem
 
-Noch in Auswahl. Es wird genau EIN konkreter, regelmäßig auftretender
-Arbeitsprozess aus Enricos Alltag (Solo-Founder von Optifyx) ausgewählt.
-Fünf Kandidaten werden heute bewertet: Rechnungs- und Abo-Agent,
-Founder-Inbox-Agent, Follow-up-Agent, Content-Produktionsagent,
-Creator-Campaign-Delivery-Agent. Die Bewertung mit Entscheidungsbegründung
-liegt nach der Auswahl in `docs/decision-01-agent-selection.md`.
+Als Solo-Founder kommen Rechnungen und Belege verstreut an (Mail, PDF,
+Screenshot) und landen unsortiert in Ordnern. Abos und deren Preiserhöhungen
+bleiben unbemerkt, und vor Steuerterminen kostet das Aufräumen Stunden und
+Nerven.
 
 ## Was der Agent macht
 
-Wird nach der Entscheidung ausgefüllt. Fest steht der Anspruch: Der Agent
-führt mindestens drei zusammenhängende Arbeitsschritte autonom aus, und das
-Ergebnis ist unmittelbar nutzbar, nachvollziehbar (mit Quellen-Bezug und
-Aktivitätsverlauf) und in einem Durchlauf demonstrierbar.
+Belege in einen Eingangsordner legen, fertig. Der Agent liest jeden Beleg,
+prüft ihn auf Vollständigkeit, gleicht ihn mit dem Bestand ab (Dublette?
+bekanntes Abo? Preis gestiegen?) und entscheidet mit Begründung: automatisch
+verbuchen oder zur Prüfung vorlegen. Heraus kommt ein geprüftes,
+nachvollziehbares und buchhaltungsvorbereitendes Belegpaket, dazu ein
+Abo-Radar, das wiederkehrende Kosten und Preiserhöhungen sichtbar macht.
+
+Hinweis: Der Agent gibt keine Steuerberatung und verspricht keine rechtliche
+Konformität. Er bereitet Belege strukturiert und nachvollziehbar vor.
 
 ## Stack
 
 - [x] Claude Code (Agent / Skills)
 - [ ] n8n
-- [ ] Sonstiges: wird nach der Agenten-Entscheidung ergänzt
+- [x] Sonstiges: Python (lokaler Verarbeitungskern), SQLite (lokale Ablage)
 
 ## Setup
 
-Folgt, sobald es etwas zum Einrichten gibt. Geplant ist eine an Claude
-adressierte INSTALL.md.
+Folgt mit dem ersten Vertical Slice. Geplant ist eine an Claude adressierte
+INSTALL.md.
 
 ## Was während der Challenge entstanden ist
 
@@ -39,11 +43,12 @@ Ehrliche Abgrenzung zur Vorarbeit:
   Dashboard-Projekt (Leads, Creator, Content, Finance) in einem eigenen
   Repository. Es wird NICHT als Challenge-Ergebnis ausgegeben.
 - **Wird aus Optifyx nur als Wissen genutzt:** Architektur-, UX-, Sicherheits-
-  und Testmuster (z.B. Auditlog, Provenienz-Spalten, fail-closed Validierung,
-  Test-Isolation). Bisher wurde kein Optifyx-Code übernommen.
-- **Entsteht neu in der Challenge:** Der komplette Challenge-Agent,
+  und Testmuster (Auditlog mit alt/neu-Zustand, Provenienz-Verweise,
+  fail-closed Validierung, Review-Bucket, Test-Isolation mit Temp-DB).
+  Bisher wurde kein Optifyx-Code übernommen; alles wird neu geschrieben.
+- **Entsteht neu in der Challenge:** Der komplette Belegwächter,
   ausschließlich in diesem Repository, nachvollziehbar über die
-  Commit-Historie ab heute.
+  Commit-Historie ab 23.07.2026.
 
 ## Learnings
 

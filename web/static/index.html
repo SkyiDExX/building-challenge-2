@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Belegwächter</title>
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+
+<div class="proto-banner" role="note">
+  Demo-Modus: alle Belege sind synthetisch erfunden. Der Agent verarbeitet sie echt und lokal, es gibt keine externen Dienste.
+</div>
+
+<header class="kopf">
+  <div class="kopf-titel">
+    <svg class="logo" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2 4 5v6c0 5 3.4 9.4 8 11 4.6-1.6 8-6 8-11V5l-8-3z" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M8.5 12l2.5 2.5 4.5-5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    <div>
+      <h1>Belegwächter</h1>
+      <p class="untertitel">Belege und Kostennachweise rein, geprüfte Übersicht raus.</p>
+    </div>
+  </div>
+  <button id="reset-btn" class="btn btn-sekundaer" type="button">Demo zurücksetzen</button>
+</header>
+
+<main>
+  <!-- Zone 1: Eingang (zentrale manuelle Kosten-Inbox) -->
+  <section class="zone" aria-labelledby="eingang-h">
+    <h2 id="eingang-h" class="zonen-titel">Kosten-Inbox</h2>
+    <button id="upload-zone" class="upload-zone" type="button" aria-describedby="upload-hinweis">
+      <svg viewBox="0 0 24 24" aria-hidden="true" class="upload-icon"><path d="M12 16V5m0 0-4 4m4-4 4 4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 17v2a1.5 1.5 0 0 0 1.5 1.5h13A1.5 1.5 0 0 0 20 19v-2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+      <span class="upload-text">Belege hier ablegen oder klicken: PDF, PNG, JPG</span>
+      <span class="upload-sub" id="upload-hinweis">Manuelle Zuführung, danach arbeitet der Agent selbstständig: erkennen, prüfen, abgleichen, entscheiden.</span>
+    </button>
+    <input type="file" id="datei-input" class="datei-input" multiple accept=".pdf,.png,.jpg,.jpeg,application/pdf,image/png,image/jpeg">
+    <p id="datei-ausgewaehlt" class="datei-ausgewaehlt" hidden></p>
+    <div id="fehler-hinweis" class="fehler-hinweis" role="alert" hidden></div>
+    <div id="schritte" class="schritte" aria-live="polite" hidden>
+      <p id="schritte-status" class="schritte-beleg">Agent arbeitet …</p>
+    </div>
+  </section>
+
+  <div class="spalten">
+    <!-- Zone 2: Ergebnis -->
+    <section class="zone" aria-labelledby="ergebnis-h">
+      <h2 id="ergebnis-h" class="zonen-titel">Belege</h2>
+      <p id="leerzustand" class="leerzustand">Noch keine Belege. Lege eine Rechnung in die Kosten-Inbox, der Agent übernimmt den Rest.</p>
+      <ul id="beleg-liste" class="beleg-liste"></ul>
+      <p id="zaehler" class="zaehler" aria-live="polite" hidden></p>
+    </section>
+
+    <!-- Zone 3: Abo-Radar -->
+    <section class="zone" aria-labelledby="radar-h">
+      <h2 id="radar-h" class="zonen-titel">Abo-Radar</h2>
+      <p class="radar-hinweis">Wiederkehrende Kosten, erkannt aus deinen übernommenen Belegen. Jede Einschätzung ist begründet.</p>
+      <p id="radar-leer" class="leerzustand">Das Radar füllt sich, sobald wiederkehrende Belege verarbeitet sind.</p>
+      <ul id="radar-liste" class="radar-liste"></ul>
+    </section>
+  </div>
+
+  <!-- Zone 4: Fuß -->
+  <section class="zone" aria-labelledby="fuss-h">
+    <h2 id="fuss-h" class="zonen-titel">Mitnehmen</h2>
+    <div class="fuss-aktionen">
+      <a id="export-btn" class="btn btn-primaer" href="/api/export.csv" download>Als CSV exportieren</a>
+      <span id="export-status" class="export-status"></span>
+    </div>
+    <details id="audit-details">
+      <summary>Auditverlauf</summary>
+      <p class="audit-hinweis">Jede Aktion des Agenten, chronologisch. Nichts passiert im Verborgenen.</p>
+      <ul id="audit-liste" class="audit-liste"></ul>
+    </details>
+  </section>
+</main>
+
+<!-- Detailansicht -->
+<div id="detail-overlay" class="detail-overlay" hidden>
+  <div class="detail" role="dialog" aria-modal="true" aria-labelledby="detail-titel">
+    <div class="detail-kopf">
+      <h3 id="detail-titel"></h3>
+      <button id="detail-schliessen" class="btn btn-sekundaer" type="button">Schließen (Esc)</button>
+    </div>
+    <div class="detail-spalten">
+      <div class="detail-quelle">
+        <h4>Quelle</h4>
+        <div id="detail-quelle-inhalt"></div>
+      </div>
+      <div class="detail-felder">
+        <h4>Erkannte Angaben</h4>
+        <dl id="detail-felder-liste"></dl>
+        <h4>Checkliste</h4>
+        <ul id="detail-checkliste"></ul>
+        <h4>Entscheidung des Agenten</h4>
+        <p id="detail-entscheidung" class="entscheidung"></p>
+        <h4>Agentenschritte</h4>
+        <ul id="detail-schritte" class="audit-liste"></ul>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Reset-Dialog -->
+<div id="reset-overlay" class="detail-overlay" hidden>
+  <div class="detail dialog-klein" role="dialog" aria-modal="true" aria-labelledby="reset-frage">
+    <p id="reset-frage">Alle Demo-Daten löschen und von vorn beginnen?</p>
+    <div class="dialog-aktionen">
+      <button id="reset-ja" class="btn btn-primaer" type="button">Ja, zurücksetzen</button>
+      <button id="reset-nein" class="btn btn-sekundaer" type="button">Abbrechen</button>
+    </div>
+  </div>
+</div>
+
+<footer class="seiten-fuss">
+  Belegwächter — lokal, ohne externe Dienste. Keine Steuerberatung, keine rechtliche Sicherheit, keine Compliance-Zusage.
+</footer>
+
+<script src="/app.js"></script>
+</body>
+</html>

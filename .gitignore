@@ -1,0 +1,14 @@
+# Secrets — API-Keys NIEMALS committen
+.env
+*.key
+credentials*.json
+
+# Abhängigkeiten / Umgebungen
+node_modules/
+.venv/
+venv/
+__pycache__/
+
+# System
+.DS_Store
+*.log

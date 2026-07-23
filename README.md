@@ -1,42 +1,56 @@
-# SKAILE Building Challenge
+# SKAILE Building Challenge — Building Challenge #2
 
-> Diese Datei füllst du im Laufe der Challenge aus. Die Platzhalter in eckigen
-> Klammern ersetzt du durch deine Inhalte — dein Claude Code hilft dir dabei
-> (siehe START.md).
+> Stand Tag 1 (23.07.2026): Dieses Projekt befindet sich in einer kurzen,
+> zeitlich begrenzten Agenten-Discovery. Der finale Agent ist noch nicht
+> gewählt. Diese README wird nach der Entscheidung aktualisiert.
 
 ## Das Problem
 
-[1-2 Sätze: Wessen Problem löst dein Agent? Was kostet das Problem heute an
-Zeit, Geld oder Nerven?]
+Noch in Auswahl. Es wird genau EIN konkreter, regelmäßig auftretender
+Arbeitsprozess aus Enricos Alltag (Solo-Founder von Optifyx) ausgewählt.
+Fünf Kandidaten werden heute bewertet: Rechnungs- und Abo-Agent,
+Founder-Inbox-Agent, Follow-up-Agent, Content-Produktionsagent,
+Creator-Campaign-Delivery-Agent. Die Bewertung mit Entscheidungsbegründung
+liegt nach der Auswahl in `docs/decision-01-agent-selection.md`.
 
 ## Was der Agent macht
 
-[2-3 Sätze: Input rein → was passiert → Ergebnis raus. Einfach erklärt, so
-dass es jemand ohne Technik-Hintergrund versteht.]
+Wird nach der Entscheidung ausgefüllt. Fest steht der Anspruch: Der Agent
+führt mindestens drei zusammenhängende Arbeitsschritte autonom aus, und das
+Ergebnis ist unmittelbar nutzbar, nachvollziehbar (mit Quellen-Bezug und
+Aktivitätsverlauf) und in einem Durchlauf demonstrierbar.
 
 ## Stack
 
-- [ ] Claude Code (Agent / Skills)
+- [x] Claude Code (Agent / Skills)
 - [ ] n8n
-- [ ] Sonstiges: [was?]
+- [ ] Sonstiges: wird nach der Agenten-Entscheidung ergänzt
 
 ## Setup
 
-[Wie richtet man deinen Agenten ein? Wenn du es richtig gut machen willst:
-Schreib eine INSTALL.md, die an Claude adressiert ist — so wie beim
-Video-Cutter von Sebastian. Das gibt Bonuspunkte bei Doku/Teilbarkeit.]
+Folgt, sobald es etwas zum Einrichten gibt. Geplant ist eine an Claude
+adressierte INSTALL.md.
 
 ## Was während der Challenge entstanden ist
 
-[2-3 Stichpunkte: Was gab es vorher schon (siehe dein Check-in-Post), was
-ist neu dazugekommen?]
+Ehrliche Abgrenzung zur Vorarbeit:
+
+- **Existierte vorher schon:** Optifyx OS, ein separates lokales
+  Dashboard-Projekt (Leads, Creator, Content, Finance) in einem eigenen
+  Repository. Es wird NICHT als Challenge-Ergebnis ausgegeben.
+- **Wird aus Optifyx nur als Wissen genutzt:** Architektur-, UX-, Sicherheits-
+  und Testmuster (z.B. Auditlog, Provenienz-Spalten, fail-closed Validierung,
+  Test-Isolation). Bisher wurde kein Optifyx-Code übernommen.
+- **Entsteht neu in der Challenge:** Der komplette Challenge-Agent,
+  ausschließlich in diesem Repository, nachvollziehbar über die
+  Commit-Historie ab heute.
 
 ## Learnings
 
-[Die 2-3 wichtigsten Dinge, die du beim Bauen gelernt hast — auch Fails!]
+Wird im Laufe der Challenge gefüllt.
 
 ---
 
-**Demo-Video:** [Link zu Loom oder YouTube unlisted — EIN Durchlauf, ungeschnitten]
+**Demo-Video:** [folgt zur Abgabe — EIN Durchlauf, ungeschnitten]
 
-*SKAILE Academy Building Challenge — [Monat/Jahr]*
+*SKAILE Academy Building Challenge — Juli 2026*

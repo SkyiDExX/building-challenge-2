@@ -1,34 +1,27 @@
 """Schritt 3/4 des Agent-Zyklus: erklaerbarer Abo-Vergleich (Wow-Funktion).
 
 Ein Preis gilt nur dann als eindeutig vergleichbar, wenn Anbieter, Tarif,
-Waehrung und Abrechnungszeitraum mit dem letzten bekannten Beleg desselben
-Anbieters uebereinstimmen. Weicht eine dieser Dimensionen ab oder fehlt sie,
-lautet die Einschaetzung "Vergleich erforderlich" statt eines falschen
-Alarms. Menge/Seats, Netto-/Brutto-Basis, Rabatt und anteilige Abrechnung
-sind in diesem Slice keine extrahierten Felder (keine Fixture variiert sie)
-und werden daher nicht separat geprueft; das ist eine bewusste, dokumentierte
+Waehrung und Abrechnungszeitraum mit der letzten bestaetigten Baseline
+desselben Anbieters uebereinstimmen (siehe belegwaechter/bestand.py,
+letzte_baseline). Weicht eine dieser Dimensionen ab oder fehlt sie, lautet
+die Einschaetzung "Vergleich erforderlich" statt eines falschen Alarms.
+Menge/Seats, Netto-/Brutto-Basis, Rabatt und anteilige Abrechnung sind in
+diesem Slice keine extrahierten Felder (keine Fixture variiert sie) und
+werden daher nicht separat geprueft; das ist eine bewusste, dokumentierte
 Grenze des MVP (siehe README, Abschnitt "Bekannte Einschraenkungen").
 """
 from __future__ import annotations
 
+from belegwaechter.betraege import betrag_zu_decimal
 from belegwaechter.modelle import (
     RADAR_BELEG_FEHLT,
     RADAR_NEU,
     RADAR_STABIL,
     RADAR_VERAENDERT_EINDEUTIG,
-    RADAR_VERAENDERT_UNKLAR,
+    RADAR_VERGLEICH_ERFORDERLICH,
     Beleg,
     RadarEintrag,
 )
-
-
-def _betrag_zu_zahl(betrag: str | None) -> float | None:
-    if not betrag:
-        return None
-    try:
-        return float(betrag.replace(".", "").replace(",", "."))
-    except ValueError:
-        return None
 
 
 def radar_bewerten(beleg: Beleg, vorheriger: dict | None) -> RadarEintrag:
@@ -64,7 +57,7 @@ def radar_bewerten(beleg: Beleg, vorheriger: dict | None) -> RadarEintrag:
             anbieter=anbieter,
             rhythmus=zeitraum,
             letzter_betrag=betrag_anzeige,
-            einschaetzung=RADAR_VERAENDERT_UNKLAR,
+            einschaetzung=RADAR_VERGLEICH_ERFORDERLICH,
             begruendung=(
                 f"Preisänderung möglich, Vergleich erforderlich: {dimensionen} "
                 f"weicht vom vorherigen Beleg ({vorheriger.get('datum')}) ab. "
@@ -72,18 +65,18 @@ def radar_bewerten(beleg: Beleg, vorheriger: dict | None) -> RadarEintrag:
             ),
         )
 
-    alt = _betrag_zu_zahl(vorheriger.get("betrag"))
-    neu = _betrag_zu_zahl(betrag)
+    alt = betrag_zu_decimal(vorheriger.get("betrag"))
+    neu = betrag_zu_decimal(betrag)
     if alt is None or neu is None:
         return RadarEintrag(
             anbieter=anbieter,
             rhythmus=zeitraum,
             letzter_betrag=betrag_anzeige,
-            einschaetzung=RADAR_VERAENDERT_UNKLAR,
+            einschaetzung=RADAR_VERGLEICH_ERFORDERLICH,
             begruendung="Vergleich erforderlich: Betrag konnte nicht in beiden Belegen eindeutig gelesen werden.",
         )
 
-    if abs(neu - alt) < 0.005:
+    if neu == alt:
         return RadarEintrag(
             anbieter=anbieter,
             rhythmus=zeitraum,

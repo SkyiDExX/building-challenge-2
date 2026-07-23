@@ -43,3 +43,13 @@ def anbieter_historie(beleg: Beleg, bestand: list[dict]) -> list[dict]:
     if not schluessel:
         return []
     return [e for e in bestand if e["anbieter_schluessel"] == schluessel]
+
+
+def letzte_baseline(beleg: Beleg, bestand: list[dict]) -> dict | None:
+    """Vergleichsbasis fuer den Preisvergleich ist der neueste Beleg
+    desselben Anbieters mit ABGESCHLOSSENEM Preisvergleich
+    (baseline_bestaetigt). Ein offener Vergleichsfall (z.B. abweichender
+    Zeitraum, ungeklaerter Rabatt) wird nie stillschweigend als Referenz
+    fuer den naechsten Vergleich verwendet."""
+    historie = [e for e in anbieter_historie(beleg, bestand) if e.get("baseline_bestaetigt")]
+    return historie[-1] if historie else None

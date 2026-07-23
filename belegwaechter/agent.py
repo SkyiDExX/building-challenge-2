@@ -1,12 +1,12 @@
 """Orchestriert den Agent-Zyklus je Eingang: Wahrnehmen, Planen, Werkzeuge
 ausfuehren, Bewerten, Handeln, Erklaeren, Erinnern (docs/MASTER_PLAN.md 30b).
 
-Jeder Verarbeitungslauf erzeugt einen echten, protokollierten Schritteverlauf
-(mindestens: Eingang erkannt, Quellenqualitaet bewertet, Extraktionsplan
-gewaehlt, Felder extrahiert, Vollstaendigkeit geprueft, Bestand abgeglichen,
-Abovergleich bewertet, Entscheidung getroffen, Ergebnis gespeichert,
-Auditverlauf aktualisiert). Kein Schritt ist eine Ladeanimation ohne echte
-Aktion dahinter.
+Der Ausfuehrungsplan (belegwaechter/planen.py) ist die einzige
+Steuerungsquelle fuer Werkzeuge: dieser Executor fragt ausschliesslich
+plan.werkzeug_aktiv(...) und verzweigt nirgends erneut eigenstaendig anhand
+von beleg.stufe. Jeder Verarbeitungslauf erzeugt einen echten,
+protokollierten Schritteverlauf; kein Schritt ist eine Ladeanimation ohne
+echte Aktion dahinter.
 """
 from __future__ import annotations
 
@@ -15,13 +15,40 @@ import uuid
 from datetime import datetime, timezone
 
 from belegwaechter import bestand as bestand_modul
+from belegwaechter import betraege
 from belegwaechter import dateien
+from belegwaechter import dateinamen
 from belegwaechter import entscheiden as entscheiden_modul
 from belegwaechter import extrahieren
+from belegwaechter import fehlertexte
+from belegwaechter import planen
 from belegwaechter import radar as radar_modul
 from belegwaechter import speicher
 from belegwaechter.pruefen import checkliste_pruefen
-from belegwaechter.modelle import AUSGANG_UEBERNOMMEN, AgentSchritt, Beleg
+from belegwaechter.modelle import (
+    AUSGANG_DUBLETTE,
+    AUSGANG_FEHLGESCHLAGEN,
+    AUSGANG_ORIGINAL_ANFORDERN,
+    AUSGANG_REVIEW,
+    AUSGANG_UEBERNOMMEN,
+    DOKUMENTSTATUS_AUSSORTIERT,
+    DOKUMENTSTATUS_FEHLGESCHLAGEN,
+    DOKUMENTSTATUS_VORBEREITET,
+    DOKUMENTSTATUS_ZURUECKGESTELLT,
+    RADAR_NEU,
+    RADAR_STABIL,
+    RADAR_VERAENDERT_EINDEUTIG,
+    RADAR_VERGLEICH_ERFORDERLICH,
+    REVIEWSTATUS_KEINE,
+    REVIEWSTATUS_OFFEN,
+    AgentSchritt,
+    Beleg,
+)
+
+
+class PlanKonsistenzFehler(Exception):
+    """Verletzung einer der drei Plan-Executor-Invarianten (siehe
+    _plan_und_schritte_pruefen)."""
 
 
 def _jetzt() -> str:
@@ -51,13 +78,108 @@ def _schritt(
     )
 
 
+_BEKANNTE_SCHRITTNAMEN_JE_WERKZEUG = {
+    "extraktion": "Felder extrahiert",
+    "checkliste": "Vollstaendigkeit geprueft",
+    "bestand": "Bestand abgeglichen",
+    "radar": "Abovergleich bewertet",
+}
+
+
+def _plan_und_schritte_pruefen(plaene: list[planen.Ausfuehrungsplan], schritte: list[AgentSchritt]) -> None:
+    """Drei Invarianten zwischen Plan und tatsaechlicher Ausfuehrung, nach
+    jedem Lauf geprueft:
+    1. kein ausgefuehrtes Werkzeug ohne aktiven Planeintrag
+    2. kein aktiver Planeintrag ohne ausgefuehrten oder begruendet
+       fehlgeschlagenen Agentenschritt
+    3. keine Planaenderung ohne neue Version plus Revisionsgrund
+    """
+    finaler_plan = plaene[-1]
+    schritte_je_name = {s.schritt: s for s in schritte}
+
+    for werkzeug_name, schritt_name in _BEKANNTE_SCHRITTNAMEN_JE_WERKZEUG.items():
+        aktiv = finaler_plan.werkzeug_aktiv(werkzeug_name)
+        schritt = schritte_je_name.get(schritt_name)
+        if schritt is None:
+            raise PlanKonsistenzFehler(f"Kein Agentenschritt fuer Werkzeug '{werkzeug_name}' protokolliert.")
+        ausgefuehrt = schritt.status in ("ok", "fehler")
+        if ausgefuehrt and not aktiv:
+            raise PlanKonsistenzFehler(
+                f"Werkzeug '{werkzeug_name}' wurde ausgefuehrt, ist im finalen Plan aber inaktiv."
+            )
+        if aktiv and not ausgefuehrt:
+            raise PlanKonsistenzFehler(
+                f"Werkzeug '{werkzeug_name}' ist im finalen Plan aktiv, wurde aber nicht ausgefuehrt."
+            )
+
+    for index in range(1, len(plaene)):
+        vorheriger, aktueller = plaene[index - 1], plaene[index]
+        if aktueller.version <= vorheriger.version:
+            raise PlanKonsistenzFehler("Planrevision ohne aufsteigende Version.")
+        if not aktueller.revisionsgrund:
+            raise PlanKonsistenzFehler("Planrevision ohne protokollierten Revisionsgrund.")
+
+
+def _plan_revidieren(
+    beleg: Beleg,
+    plaene: list[planen.Ausfuehrungsplan],
+    plan: planen.Ausfuehrungsplan,
+    *,
+    lesefehler: bool,
+    dublette: bool,
+    checkliste_vollstaendig: bool | None,
+) -> planen.Ausfuehrungsplan:
+    """Wendet planen.plan_verfeinern an, protokolliert die Revision als
+    eigenen Agentenschritt und haengt sie an die Planhistorie an, falls sich
+    tatsaechlich etwas geaendert hat."""
+    neuer_plan = planen.plan_verfeinern(
+        plan, lesefehler=lesefehler, dublette=dublette, checkliste_vollstaendig=checkliste_vollstaendig
+    )
+    if neuer_plan.version == plan.version:
+        return plan
+    t0 = _jetzt()
+    _schritt(beleg, "Ausfuehrungsplan aktualisiert", "ok", "planung", neuer_plan.revisionsgrund, t0, _jetzt())
+    plaene.append(neuer_plan)
+    return neuer_plan
+
+
+def _status_ableiten(
+    ausgang: str, fehlende_checkliste: list[str], radar_einschaetzung: str | None
+) -> tuple[str, str, str | None]:
+    """Leitet die drei orthogonalen Statusfelder aus dem fachlichen Ausgang
+    und der Radar-Einschaetzung ab. `ausgang` bleibt die primaere,
+    ausfuehrliche Fachentscheidung (siehe entscheiden.py); dokumentstatus/
+    reviewstatus/review_aufgabe machen zusaetzlich explizit, ob ein
+    vorbereiteter Beleg trotzdem noch eine offene Pruefaufgabe hat -- ein
+    unklarer Preisvergleich darf den Beleg ins Paket aufnehmen, ohne den
+    Vergleich als abgeschlossen darzustellen."""
+    if ausgang == AUSGANG_UEBERNOMMEN:
+        if radar_einschaetzung == RADAR_VERGLEICH_ERFORDERLICH:
+            return DOKUMENTSTATUS_VORBEREITET, REVIEWSTATUS_OFFEN, "Preisänderung prüfen"
+        return DOKUMENTSTATUS_VORBEREITET, REVIEWSTATUS_KEINE, None
+    if ausgang == AUSGANG_DUBLETTE:
+        return DOKUMENTSTATUS_AUSSORTIERT, REVIEWSTATUS_KEINE, None
+    if ausgang == AUSGANG_ORIGINAL_ANFORDERN:
+        return DOKUMENTSTATUS_ZURUECKGESTELLT, REVIEWSTATUS_OFFEN, "Original anfordern"
+    if ausgang == AUSGANG_REVIEW:
+        if fehlende_checkliste:
+            aufgabe = "Fehlende Angaben ergänzen: " + ", ".join(fehlende_checkliste)
+        else:
+            aufgabe = "Dateiendung und Dateiinhalt widersprechen sich, bitte prüfen."
+        return DOKUMENTSTATUS_ZURUECKGESTELLT, REVIEWSTATUS_OFFEN, aufgabe
+    if ausgang == AUSGANG_FEHLGESCHLAGEN:
+        return DOKUMENTSTATUS_FEHLGESCHLAGEN, REVIEWSTATUS_OFFEN, "Original erneut ablegen"
+    return DOKUMENTSTATUS_ZURUECKGESTELLT, REVIEWSTATUS_OFFEN, "Beleg pruefen"
+
+
 def verarbeite_datei(
-    conn: sqlite3.Connection, lauf_id: str, dateiname: str, inhalt: bytes
+    conn: sqlite3.Connection, lauf_id: str, roher_dateiname: str, inhalt: bytes
 ) -> Beleg:
+    anzeigename = dateinamen.anzeigename(roher_dateiname)
     beleg = Beleg(
         id=str(uuid.uuid4()),
         lauf_id=lauf_id,
-        dateiname=dateiname,
+        dateiname=anzeigename,
         dateihash="",
         dateityp="",
         stufe="",
@@ -88,58 +210,114 @@ def verarbeite_datei(
         t0, _jetzt(),
     )
 
-    dateipfad = speicher.EINGANG_DIR / f"{hash_[:12]}_{dateiname}"
-    dateipfad.write_bytes(inhalt)
+    endung_konsistent = dateien.endung_passt_zu_typ(anzeigename, dateityp)
 
-    # 3. Planen: Extraktionsplan gewaehlt
+    # 3. Planen: Ausfuehrungsplan erstellt (Version 1, einzige Steuerungsquelle)
     t0 = _jetzt()
-    if stufe == "A":
-        plan = "PDF-Textextraktion, Checkliste, Bestandsabgleich, Abovergleich."
-    else:
-        plan = (
-            "Keine automatische Extraktion: OCR-Gate nicht bestanden "
-            "(docs/FEASIBILITY_INPUTS.md). Direkt Original anfordern."
-        )
-    _schritt(beleg, "Extraktionsplan gewaehlt", "ok", "planung", plan, t0, _jetzt())
+    plan = planen.plan_erstellen(stufe, endung_konsistent)
+    plaene = [plan]
+    _schritt(
+        beleg, "Ausfuehrungsplan erstellt", "ok", "planung",
+        f"Quellenklasse '{plan.quellenklasse}'. Aktive Werkzeuge: "
+        + ", ".join(w.name for w in plan.werkzeuge.values() if w.ausfuehren) or "keine",
+        t0, _jetzt(),
+    )
+
+    interner_speichername = dateinamen.speichername(roher_dateiname)
+    beleg.speichername = interner_speichername
+    interner_dateiname = f"{hash_[:12]}_{interner_speichername}"
+
+    pfad_unsicher = False
+    try:
+        zielpfad = dateinamen.zielpfad(speicher.EINGANG_DIR, interner_dateiname)
+    except dateinamen.UnsichererPfadFehler:
+        pfad_unsicher = True
+        zielpfad = None
+
+    if pfad_unsicher:
+        # In der Praxis unerreichbar: dateinamen.speichername() entfernt
+        # bereits jedes Trennzeichen und jeden Laufwerksbuchstaben, bevor
+        # ueberhaupt ein Zielpfad gebildet wird. Dies ist ausschliesslich
+        # ein Netz gegen einen hypothetischen Fehler in der Sanitisierung;
+        # betrifft nur diese eine Datei, nicht die restliche Charge.
+        beleg.storage_key = None
+        beleg.fehlercode = fehlertexte.FEHLERCODE_PFAD_UNSICHER
+        beleg.ausgang = AUSGANG_FEHLGESCHLAGEN
+        beleg.begruendung = f"{fehlertexte.nutzermeldung(fehlertexte.FEHLERCODE_PFAD_UNSICHER)} Diese Datei wurde nicht verarbeitet."
+        beleg.dokumentstatus = DOKUMENTSTATUS_FEHLGESCHLAGEN
+        beleg.reviewstatus = REVIEWSTATUS_OFFEN
+        beleg.review_aufgabe = "Datei mit anderem Namen erneut hochladen."
+        t0 = _jetzt()
+        for name in ("extraktion", "checkliste", "bestand", "radar"):
+            _schritt(
+                beleg, _BEKANNTE_SCHRITTNAMEN_JE_WERKZEUG[name], "uebersprungen", "keins",
+                "Uebersprungen: unsicherer Dateiname abgelehnt.", t0, _jetzt(),
+            )
+        _schritt(beleg, "Entscheidung getroffen", "ok", "entscheidungsregeln", beleg.begruendung, t0, _jetzt())
+        speicher.beleg_speichern(conn, beleg, None, None)
+        speicher.audit_schreiben(conn, aktion=f"Beleg verarbeitet: {beleg.ausgang}", objekt=beleg.dateiname, alt=None, neu=beleg.begruendung)
+        speicher.plan_speichern(conn, lauf_id, beleg.id, plan)
+        for schritt in beleg.schritte:
+            speicher.agent_schritt_speichern(conn, lauf_id, beleg.id, schritt)
+        return beleg
+
+    zielpfad.write_bytes(inhalt)
+    beleg.storage_key = speicher.storage_key_fuer(interner_dateiname)
 
     # 4. Werkzeuge ausfuehren: Felder extrahiert
-    lesefehler: str | None = None
+    fehlercode_extraktion: str | None = None
     text_lesbar = False
-    if stufe == "A":
+    if plan.werkzeug_aktiv("extraktion"):
         t0 = _jetzt()
         try:
-            text = extrahieren.pdf_text_lesen(str(dateipfad))
+            text = extrahieren.pdf_text_lesen(str(zielpfad))
             text_lesbar = bool(text.strip())
             if text_lesbar:
                 beleg.felder = extrahieren.felder_aus_pdf_text(text)
+                beleg.extraktionsmethode = "pypdf-textlayer"
                 gefunden = sum(1 for f in beleg.felder.values() if f.wert)
                 begr = f"{len(text)} Zeichen gelesen, {gefunden}/{len(beleg.felder)} Felder gefunden."
                 status = "ok"
             else:
                 beleg.felder = extrahieren.leere_felder()
-                begr = "Kein Text in der PDF gefunden (moeglicherweise gescanntes Bild-PDF)."
+                beleg.extraktionsmethode = "keine"
+                fehlercode_extraktion = fehlertexte.FEHLERCODE_PDF_OHNE_TEXT
+                begr = fehlertexte.nutzermeldung(fehlercode_extraktion)
                 status = "fehler"
-        except Exception as exc:  # defekte/unlesbare PDF: ehrlich melden, nichts erfinden
-            lesefehler = str(exc)
+        except Exception:
             beleg.felder = extrahieren.leere_felder()
-            begr = f"PDF konnte nicht gelesen werden: {lesefehler}"
+            beleg.extraktionsmethode = "keine"
+            fehlercode_extraktion = fehlertexte.FEHLERCODE_PDF_UNLESBAR
+            begr = fehlertexte.nutzermeldung(fehlercode_extraktion)
             status = "fehler"
         _schritt(beleg, "Felder extrahiert", status, "pypdf", begr, t0, _jetzt())
     else:
         t0 = _jetzt()
         beleg.felder = extrahieren.leere_felder()
+        beleg.extraktionsmethode = (
+            "keine-ocr" if plan.quellenklasse == planen.QUELLENKLASSE_BILD_OHNE_OCR else "keine"
+        )
+        werkzeugschritt = plan.werkzeuge["extraktion"]
         _schritt(
-            beleg, "Felder extrahiert", "uebersprungen", "keins",
-            "Uebersprungen: automatische Feldextraktion aus Bildern ist in "
-            "dieser Version nicht aktiviert.",
-            t0, _jetzt(),
+            beleg, "Felder extrahiert", "uebersprungen", werkzeugschritt.werkzeug,
+            werkzeugschritt.begruendung, t0, _jetzt(),
+        )
+
+    # Planrevision (Teil 1): ein Lesefehler deaktiviert Checkliste, Bestand
+    # und Radar gleichermassen -- angewendet, bevor plan.werkzeug_aktiv()
+    # fuer die naechsten beiden Schritte abgefragt wird.
+    if fehlercode_extraktion:
+        plan = _plan_revidieren(
+            beleg, plaene, plan, lesefehler=True, dublette=False, checkliste_vollstaendig=None
         )
 
     # 5. Bewerten: Vollstaendigkeit geprueft
-    t0 = _jetzt()
-    if stufe == "A" and not lesefehler:
+    checkliste_vollstaendig: bool | None = None
+    if plan.werkzeug_aktiv("checkliste"):
+        t0 = _jetzt()
         checkliste = checkliste_pruefen(beleg, text_lesbar=text_lesbar)
         beleg.checkliste = checkliste
+        checkliste_vollstaendig = all(c.erfuellt for c in checkliste)
         erfuellt = sum(1 for c in checkliste if c.erfuellt)
         _schritt(
             beleg, "Vollstaendigkeit geprueft", "ok", "checkliste-fail-closed",
@@ -149,17 +327,15 @@ def verarbeite_datei(
     else:
         checkliste = []
         beleg.checkliste = checkliste
-        _schritt(
-            beleg, "Vollstaendigkeit geprueft", "uebersprungen", "keins",
-            "Uebersprungen: kein lesbarer Originalbeleg vorhanden.",
-            t0, _jetzt(),
-        )
+        t0 = _jetzt()
+        werkzeugschritt = plan.werkzeuge["checkliste"]
+        _schritt(beleg, "Vollstaendigkeit geprueft", "uebersprungen", "keins", werkzeugschritt.begruendung, t0, _jetzt())
 
     # 6. Werkzeuge ausfuehren: Bestand abgeglichen
     bestand = speicher.bestand_uebernommen(conn)
-    t0 = _jetzt()
     dublette_treffer: dict | None = None
-    if stufe == "A" and not lesefehler:
+    if plan.werkzeug_aktiv("bestand"):
+        t0 = _jetzt()
         dublette_treffer = bestand_modul.ist_dublette(beleg, bestand)
         begr = (
             f"Dublette erkannt: Referenz {beleg.feldwert('referenz')} bereits "
@@ -169,42 +345,60 @@ def verarbeite_datei(
         )
         _schritt(beleg, "Bestand abgeglichen", "ok", "referenz-betrag-datum-abgleich", begr, t0, _jetzt())
     else:
-        _schritt(
-            beleg, "Bestand abgeglichen", "uebersprungen", "keins",
-            "Uebersprungen: kein vergleichbarer Originalbeleg vorhanden.",
-            t0, _jetzt(),
-        )
+        t0 = _jetzt()
+        werkzeugschritt = plan.werkzeuge["bestand"]
+        _schritt(beleg, "Bestand abgeglichen", "uebersprungen", "keins", werkzeugschritt.begruendung, t0, _jetzt())
+
+    # Planrevision (Teil 2): Radar wird anhand der inzwischen vorliegenden
+    # Evidenz (Dublette, unvollstaendige Checkliste) bestaetigt oder
+    # begruendet deaktiviert.
+    plan = _plan_revidieren(
+        beleg, plaene, plan,
+        lesefehler=False, dublette=bool(dublette_treffer), checkliste_vollstaendig=checkliste_vollstaendig,
+    )
 
     # Handeln: Entscheidung treffen (Grundlage fuer Schritt 7 und 8)
-    ausgang, begruendung = entscheiden_modul.entscheiden(beleg, checkliste, dublette_treffer, lesefehler)
+    ausgang, begruendung, fehlercode_entscheidung = entscheiden_modul.entscheiden(
+        beleg, plan, checkliste, dublette_treffer, fehlercode_extraktion
+    )
     beleg.ausgang = ausgang
     beleg.begruendung = begruendung
+    beleg.fehlercode = fehlercode_entscheidung
     anbieter_schluessel_wert = bestand_modul.anbieter_schluessel(beleg)
+    betrag_dezimal_wert = betraege.betrag_zu_decimal(beleg.feldwert("betrag"))
+    beleg.betrag_dezimal = betraege.decimal_zu_csv_zahl(betrag_dezimal_wert) or None
 
-    # 7. Bewerten/Handeln: Abovergleich bewertet (nur fuer uebernommene Belege)
+    # 7. Bewerten/Handeln: Abovergleich bewertet
     t0 = _jetzt()
     radar_eintrag = None
-    if ausgang == AUSGANG_UEBERNOMMEN:
-        historie = bestand_modul.anbieter_historie(beleg, bestand)
-        vorheriger = historie[-1] if historie else None
+    if plan.werkzeug_aktiv("radar"):
+        vorheriger = bestand_modul.letzte_baseline(beleg, bestand)
         radar_eintrag = radar_modul.radar_bewerten(beleg, vorheriger)
         beleg.radar_hinweis = radar_eintrag.begruendung
         _schritt(beleg, "Abovergleich bewertet", "ok", "radar-vergleichbarkeit", radar_eintrag.begruendung, t0, _jetzt())
     else:
-        _schritt(
-            beleg, "Abovergleich bewertet", "uebersprungen", "keins",
-            "Uebersprungen: Beleg wurde nicht uebernommen, keine Historienaktualisierung.",
-            t0, _jetzt(),
-        )
+        werkzeugschritt = plan.werkzeuge["radar"]
+        _schritt(beleg, "Abovergleich bewertet", "uebersprungen", "keins", werkzeugschritt.begruendung, t0, _jetzt())
+
+    fehlende_checkliste = [c.name for c in checkliste if not c.erfuellt]
+    dokumentstatus, reviewstatus, review_aufgabe = _status_ableiten(
+        ausgang, fehlende_checkliste, radar_eintrag.einschaetzung if radar_eintrag else None
+    )
+    beleg.dokumentstatus = dokumentstatus
+    beleg.reviewstatus = reviewstatus
+    beleg.review_aufgabe = review_aufgabe
+    beleg.baseline_bestaetigt = (
+        ausgang == AUSGANG_UEBERNOMMEN
+        and reviewstatus == REVIEWSTATUS_KEINE
+        and (radar_eintrag is None or radar_eintrag.einschaetzung in (RADAR_NEU, RADAR_STABIL, RADAR_VERAENDERT_EINDEUTIG))
+    )
 
     # 8. Handeln: Entscheidung getroffen
     _schritt(beleg, "Entscheidung getroffen", "ok", "entscheidungsregeln", begruendung, _jetzt(), _jetzt())
 
     # 9. Erinnern: Ergebnis gespeichert
     t0 = _jetzt()
-    # Absoluter Pfad, nicht relativ zu REPO_ROOT: runtime/ liegt bei isolierten
-    # Tests bewusst in einem temporaeren Verzeichnis ausserhalb des Repos.
-    speicher.beleg_speichern(conn, beleg, str(dateipfad), anbieter_schluessel_wert, radar_eintrag)
+    speicher.beleg_speichern(conn, beleg, anbieter_schluessel_wert, radar_eintrag)
     _schritt(beleg, "Ergebnis gespeichert", "ok", "sqlite", f"Beleg gespeichert mit Ausgang '{ausgang}'.", t0, _jetzt())
 
     # 10. Erinnern: Auditverlauf aktualisiert
@@ -212,8 +406,13 @@ def verarbeite_datei(
     speicher.audit_schreiben(conn, aktion=f"Beleg verarbeitet: {ausgang}", objekt=beleg.dateiname, alt=None, neu=begruendung)
     _schritt(beleg, "Auditverlauf aktualisiert", "ok", "audit-log", "Ereignis im Auditverlauf vermerkt.", t0, _jetzt())
 
+    beleg.plaene = plaene
+    for eintrag in plaene:
+        speicher.plan_speichern(conn, lauf_id, beleg.id, eintrag)
     for schritt in beleg.schritte:
         speicher.agent_schritt_speichern(conn, lauf_id, beleg.id, schritt)
+
+    _plan_und_schritte_pruefen(plaene, beleg.schritte)
 
     return beleg
 
@@ -221,7 +420,11 @@ def verarbeite_datei(
 def verarbeite_charge(conn: sqlite3.Connection, dateien_liste: list[tuple[str, bytes]]) -> tuple[str, list[Beleg]]:
     """Verarbeitet mehrere Dateien nacheinander im selben Lauf. Die
     Reihenfolge ist bedeutsam: Sie bestimmt, welcher Beleg als 'vorheriger'
-    Vergleichswert fuer den Abo-Radar gilt."""
+    Vergleichswert fuer den Abo-Radar gilt. Transportbezogene Grenzen
+    (Dateigroesse, Anzahl, Content-Type) sind bereits von web/server.py vor
+    diesem Aufruf geprueft; hier laufen nur noch fachliche Entscheidungen
+    je Datei, die eine einzelne fehlerhafte Datei nicht die ganze Charge
+    stoppen lassen."""
     lauf_id = speicher.neuer_lauf(conn)
     ergebnisse = [verarbeite_datei(conn, lauf_id, name, inhalt) for name, inhalt in dateien_liste]
     return lauf_id, ergebnisse

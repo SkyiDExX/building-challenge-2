@@ -23,8 +23,12 @@ const RADAR_LABEL = {
   neu: ["Neu erfasst", "badge-fertig"],
   stabil: ["Stabil", "badge-fertig"],
   veraendert_eindeutig: ["Preis verändert", "badge-review"],
-  veraendert_unklar: ["Vergleich erforderlich", "badge-review"],
+  vergleich_erforderlich: ["Vergleich erforderlich", "badge-review"],
   beleg_fehlt: ["Beleg fehlt", "badge-dublette"],
+};
+
+const REVIEWSTATUS_LABEL = {
+  offen: ["Prüfung offen", "badge-review"],
 };
 
 let letzteBelege = [];
@@ -98,10 +102,17 @@ function renderBelege(belege) {
     meta.textContent = `${betragTeil}${datumTeil}${b.dateiname}`;
     z1.append(name, meta, badge(label, klasse));
     z1.appendChild(badge(QUELLE_LABEL[b.quellenstatus] || b.quellenstatus, "badge-quelle"));
+    if (b.reviewstatus === "offen" && REVIEWSTATUS_LABEL[b.reviewstatus]) {
+      const [reviewLabel, reviewKlasse] = REVIEWSTATUS_LABEL[b.reviewstatus];
+      z1.appendChild(badge(reviewLabel, reviewKlasse));
+    }
 
     const beg = document.createElement("div");
     beg.className = "beleg-begruendung";
-    beg.textContent = b.begruendung;
+    beg.textContent =
+      b.ausgang === "uebernommen" && b.reviewstatus === "offen"
+        ? "Beleg vorbereitet. Preisvergleich benötigt Prüfung."
+        : b.begruendung;
 
     btn.append(z1, beg);
     btn.addEventListener("click", () => detailOeffnen(b));
@@ -212,6 +223,48 @@ function detailOeffnen(b) {
   }
 
   $("detail-entscheidung").textContent = b.begruendung;
+
+  const reviewHinweis = $("detail-review-hinweis");
+  if (b.ausgang === "uebernommen" && b.reviewstatus === "offen") {
+    reviewHinweis.textContent = `Beleg vorbereitet. Preisvergleich benötigt Prüfung: ${b.review_aufgabe || "Preisänderung prüfen"}.`;
+    reviewHinweis.hidden = false;
+  } else {
+    reviewHinweis.hidden = true;
+  }
+
+  const planContainer = $("detail-plan");
+  planContainer.textContent = "";
+  (b.plaene || []).forEach((plan, index) => {
+    const box = document.createElement("div");
+    box.className = "plan-karte";
+    if (index > 0) {
+      const revision = document.createElement("p");
+      revision.className = "plan-revision";
+      revision.textContent = `Plan aktualisiert: ${plan.revisionsgrund || ""}`;
+      box.appendChild(revision);
+    }
+    const ziel = document.createElement("p");
+    ziel.textContent = `Ziel: ${plan.ziel}`;
+    box.appendChild(ziel);
+    const quelle = document.createElement("p");
+    quelle.textContent = `Quellenklasse: ${plan.quellenklasse}`;
+    box.appendChild(quelle);
+
+    const werkzeugeListe = document.createElement("ul");
+    (plan.werkzeuge || []).forEach((w) => {
+      const li = document.createElement("li");
+      li.textContent = `${w.ausfuehren ? "Aktiv" : "Übersprungen"} — ${w.name} (${w.werkzeug}): ${w.begruendung}`;
+      werkzeugeListe.appendChild(li);
+    });
+    box.appendChild(werkzeugeListe);
+
+    if ((plan.stopbedingungen || []).length > 0) {
+      const stop = document.createElement("p");
+      stop.textContent = `Stop-/Reviewbedingungen: ${plan.stopbedingungen.join(", ")}`;
+      box.appendChild(stop);
+    }
+    planContainer.appendChild(box);
+  });
 
   const schritteListe = $("detail-schritte");
   schritteListe.textContent = "";

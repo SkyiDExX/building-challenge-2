@@ -1,8 +1,14 @@
 """Persistenz: SQLite mit append-only Migrationsliste und Schema-Version.
 
 Isolierte Demo-Datenbank unter runtime/ (per .gitignore nie im Repo). Reset
-loescht runtime/ vollstaendig. Kein Zugriff auf Produktionsdaten, keine
-Verbindung zu Optifyx.
+loescht runtime/ vollstaendig. Kein Zugriff auf Produktivdaten.
+
+Kein absoluter Dateipfad wird persistiert: Belege werden ueber einen
+relativen storage_key referenziert (siehe dateinamen.storage_key_gueltig,
+pfad_aus_key). Bestehende Datenbanken im Schema v1 werden beim Oeffnen
+automatisch migriert, mit Sicherungskopie ueber die SQLite-Backup-API und
+einer expliziten Transaktion je Migrationsschritt (siehe
+_ausstehende_migrationen_anwenden).
 """
 from __future__ import annotations
 
@@ -11,12 +17,29 @@ import sqlite3
 import uuid
 from pathlib import Path
 
-from belegwaechter.modelle import AgentSchritt, Beleg, RadarEintrag
+from belegwaechter import betraege, dateinamen
+from belegwaechter.modelle import (
+    AUSGANG_DUBLETTE,
+    AUSGANG_UEBERNOMMEN,
+    DOKUMENTSTATUS_AUSSORTIERT,
+    DOKUMENTSTATUS_VORBEREITET,
+    DOKUMENTSTATUS_ZURUECKGESTELLT,
+    REVIEWSTATUS_KEINE,
+    REVIEWSTATUS_OFFEN,
+    AgentSchritt,
+    Beleg,
+    RadarEintrag,
+)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 RUNTIME_DIR = REPO_ROOT / "runtime"
 EINGANG_DIR = RUNTIME_DIR / "eingang"
 DB_PFAD = RUNTIME_DIR / "belegwaechter.db"
+
+_AUSGANG_ZU_DOKUMENTSTATUS = {
+    AUSGANG_UEBERNOMMEN: DOKUMENTSTATUS_VORBEREITET,
+    AUSGANG_DUBLETTE: DOKUMENTSTATUS_AUSSORTIERT,
+}
 
 
 def _migration_001_initial_schema(conn: sqlite3.Connection) -> None:
@@ -78,7 +101,146 @@ def _migration_001_initial_schema(conn: sqlite3.Connection) -> None:
     )
 
 
-MIGRATIONEN = [_migration_001_initial_schema]
+def _migration_002_provenienz_status_und_plan(conn: sqlite3.Connection) -> None:
+    """Fuehrt relative Provenienz (storage_key statt Pfad), getrennte
+    Statusfelder und die Ausfuehrungsplan-Tabelle ein. Nutzt bewusst
+    einzelne execute()-Aufrufe statt executescript(): executescript()
+    committet implizit vor dem Lauf und wuerde die vom Aufrufer
+    kontrollierte Transaktion (BEGIN IMMEDIATE / ROLLBACK bei Fehler)
+    aushebeln."""
+    for anweisung in (
+        "ALTER TABLE belege ADD COLUMN speichername TEXT",
+        "ALTER TABLE belege ADD COLUMN storage_key TEXT",
+        "ALTER TABLE belege ADD COLUMN extraktionsmethode TEXT",
+        "ALTER TABLE belege ADD COLUMN fehlercode TEXT",
+        "ALTER TABLE belege ADD COLUMN dokumentstatus TEXT",
+        "ALTER TABLE belege ADD COLUMN reviewstatus TEXT",
+        "ALTER TABLE belege ADD COLUMN review_aufgabe TEXT",
+        "ALTER TABLE belege ADD COLUMN baseline_bestaetigt INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE belege ADD COLUMN betrag_dezimal TEXT",
+        """
+        CREATE TABLE beleg_plaene (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            lauf_id TEXT NOT NULL,
+            beleg_id TEXT NOT NULL,
+            version INTEGER NOT NULL,
+            plan_json TEXT NOT NULL,
+            revisionsgrund TEXT,
+            erstellt_am TEXT NOT NULL
+        )
+        """,
+        # Historischer Konstantenwert vor der Umbenennung auf "vergleich_erforderlich".
+        "UPDATE belege SET radar_einschaetzung = 'vergleich_erforderlich' "
+        "WHERE radar_einschaetzung = 'veraendert_unklar'",
+    ):
+        conn.execute(anweisung)
+
+    _v1_zeilen_uebernehmen(conn)
+
+
+def _v1_zeilen_uebernehmen(conn: sqlite3.Connection) -> None:
+    """Ueberfuehrt bestehende v1-Zeilen in die neuen Felder. Ein alter
+    absoluter Pfad wird nur dann zum relativen storage_key, wenn er nach
+    resolve() nachweislich unterhalb von RUNTIME_DIR liegt. Andernfalls wird
+    NICHT geraten: die Zeile wird als nicht auflösbar markiert und in
+    Review geroutet."""
+    basis = RUNTIME_DIR.resolve()
+    zeilen = conn.execute(
+        "SELECT id, dateiname, dateipfad, ausgang, radar_einschaetzung, betrag FROM belege"
+    ).fetchall()
+
+    for beleg_id, dateiname, alter_pfad, ausgang, radar_einschaetzung, betrag in zeilen:
+        storage_key = None
+        fehlercode = None
+
+        if alter_pfad:
+            try:
+                aufgeloest = Path(alter_pfad).resolve()
+                if aufgeloest.is_relative_to(basis):
+                    storage_key = aufgeloest.relative_to(basis).as_posix()
+                else:
+                    fehlercode = "PFAD_NICHT_AUFLOESBAR"
+            except (OSError, ValueError):
+                fehlercode = "PFAD_NICHT_AUFLOESBAR"
+        else:
+            fehlercode = "PFAD_NICHT_AUFLOESBAR"
+
+        dokumentstatus = _AUSGANG_ZU_DOKUMENTSTATUS.get(ausgang, DOKUMENTSTATUS_ZURUECKGESTELLT)
+        reviewstatus = REVIEWSTATUS_KEINE if ausgang in (AUSGANG_UEBERNOMMEN, AUSGANG_DUBLETTE) else REVIEWSTATUS_OFFEN
+        review_aufgabe = None if reviewstatus == REVIEWSTATUS_KEINE else "Bestehenden Beleg pruefen (Migration von Schema v1)."
+
+        if fehlercode:
+            dokumentstatus = DOKUMENTSTATUS_ZURUECKGESTELLT
+            reviewstatus = REVIEWSTATUS_OFFEN
+            review_aufgabe = "Quelldatei nicht auffindbar, Original erneut ablegen."
+
+        betrag_dezimal_wert = betraege.betrag_zu_decimal(betrag)
+        betrag_dezimal = format(betrag_dezimal_wert, "f") if betrag_dezimal_wert is not None else None
+
+        baseline = 1 if (
+            ausgang == AUSGANG_UEBERNOMMEN
+            and fehlercode is None
+            and radar_einschaetzung in ("neu", "stabil", "veraendert_eindeutig")
+        ) else 0
+
+        conn.execute(
+            """
+            UPDATE belege SET
+                speichername = ?, storage_key = ?, extraktionsmethode = ?, fehlercode = ?,
+                dokumentstatus = ?, reviewstatus = ?, review_aufgabe = ?,
+                baseline_bestaetigt = ?, betrag_dezimal = ?, dateipfad = ''
+            WHERE id = ?
+            """,
+            (
+                dateinamen.speichername(dateiname) if dateiname else "beleg",
+                storage_key,
+                "unbekannt-migriert",
+                fehlercode,
+                dokumentstatus,
+                reviewstatus,
+                review_aufgabe,
+                baseline,
+                betrag_dezimal,
+                beleg_id,
+            ),
+        )
+
+
+MIGRATIONEN = [_migration_001_initial_schema, _migration_002_provenienz_status_und_plan]
+
+
+def _sicherungskopie_erstellen(conn: sqlite3.Connection, vor_version: int) -> None:
+    sicherung_pfad = RUNTIME_DIR / f"belegwaechter.db.vor-migration-v{vor_version + 1}"
+    ziel = sqlite3.connect(sicherung_pfad)
+    try:
+        conn.backup(ziel)
+    finally:
+        ziel.close()
+
+
+def _ausstehende_migrationen_anwenden(conn: sqlite3.Connection) -> None:
+    aktuell = conn.execute("SELECT version FROM schema_version").fetchone()[0]
+    ziel = len(MIGRATIONEN)
+    if aktuell >= ziel:
+        return
+
+    _sicherungskopie_erstellen(conn, aktuell)
+
+    vorheriger_isolation = conn.isolation_level
+    conn.isolation_level = None
+    try:
+        for index in range(aktuell, ziel):
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                MIGRATIONEN[index](conn)
+                conn.execute("UPDATE schema_version SET version = ?", (index + 1,))
+            except Exception:
+                conn.execute("ROLLBACK")
+                raise
+            else:
+                conn.execute("COMMIT")
+    finally:
+        conn.isolation_level = vorheriger_isolation
 
 
 def verbindung() -> sqlite3.Connection:
@@ -90,10 +252,14 @@ def verbindung() -> sqlite3.Connection:
     conn.execute("PRAGMA foreign_keys = ON")
     if neu:
         conn.execute("CREATE TABLE schema_version (version INTEGER NOT NULL)")
-        for i, migration in enumerate(MIGRATIONEN, start=1):
-            migration(conn)
-        conn.execute("INSERT INTO schema_version (version) VALUES (?)", (len(MIGRATIONEN),))
+        MIGRATIONEN[0](conn)
+        conn.execute("INSERT INTO schema_version (version) VALUES (1)")
         conn.commit()
+    try:
+        _ausstehende_migrationen_anwenden(conn)
+    except Exception:
+        conn.close()
+        raise
     return conn
 
 
@@ -104,6 +270,23 @@ def reset() -> None:
 
     if RUNTIME_DIR.exists():
         shutil.rmtree(RUNTIME_DIR)
+
+
+def storage_key_fuer(interner_dateiname: str) -> str:
+    return f"eingang/{interner_dateiname}"
+
+
+def pfad_aus_key(key: str) -> Path:
+    """Rekonstruiert den tatsaechlichen Dateipfad aus einem relativen
+    storage_key. Wirft UnsichererPfadFehler bei Traversal, absoluten Pfaden
+    oder wenn der aufgeloeste Pfad die Runtime-Basis verlassen wuerde."""
+    if not dateinamen.storage_key_gueltig(key):
+        raise dateinamen.UnsichererPfadFehler(f"Unsicherer Storage-Key: {key!r}")
+    basis = RUNTIME_DIR.resolve()
+    kandidat = (RUNTIME_DIR / key).resolve()
+    if not kandidat.is_relative_to(basis):
+        raise dateinamen.UnsichererPfadFehler(f"Storage-Key ausserhalb der Runtime-Basis: {key!r}")
+    return kandidat
 
 
 def neuer_lauf(conn: sqlite3.Connection) -> str:
@@ -119,7 +302,6 @@ def neuer_lauf(conn: sqlite3.Connection) -> str:
 def beleg_speichern(
     conn: sqlite3.Connection,
     beleg: Beleg,
-    dateipfad: str,
     anbieter_schluessel: str | None,
     radar: RadarEintrag | None,
 ) -> None:
@@ -138,15 +320,19 @@ def beleg_speichern(
             quellenstatus, anbieter, anbieter_schluessel, datum, betrag,
             waehrung, zeitraum, tarif, referenz, felder_json, checkliste_json,
             ausgang, begruendung, radar_einschaetzung, radar_begruendung,
-            erfasst_am
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+            speichername, storage_key, extraktionsmethode, fehlercode,
+            dokumentstatus, reviewstatus, review_aufgabe, baseline_bestaetigt,
+            betrag_dezimal, erfasst_am
+        ) VALUES (
+            ?, ?, ?, ?, '', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+            ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now')
+        )
         """,
         (
             beleg.id,
             beleg.lauf_id,
             beleg.dateiname,
             beleg.dateihash,
-            dateipfad,
             beleg.dateityp,
             beleg.stufe,
             beleg.quellenstatus,
@@ -164,9 +350,41 @@ def beleg_speichern(
             beleg.begruendung,
             radar.einschaetzung if radar else None,
             radar.begruendung if radar else None,
+            beleg.speichername,
+            beleg.storage_key,
+            beleg.extraktionsmethode,
+            beleg.fehlercode,
+            beleg.dokumentstatus,
+            beleg.reviewstatus,
+            beleg.review_aufgabe,
+            1 if beleg.baseline_bestaetigt else 0,
+            beleg.betrag_dezimal,
         ),
     )
     conn.commit()
+
+
+def plan_speichern(conn: sqlite3.Connection, lauf_id: str, beleg_id: str, plan) -> None:
+    conn.execute(
+        """
+        INSERT INTO beleg_plaene (lauf_id, beleg_id, version, plan_json, revisionsgrund, erstellt_am)
+        VALUES (?, ?, ?, ?, ?, datetime('now'))
+        """,
+        (lauf_id, beleg_id, plan.version, json.dumps(plan.to_dict(), ensure_ascii=False), plan.revisionsgrund),
+    )
+    conn.commit()
+
+
+def plaene_fuer_beleg(conn: sqlite3.Connection, beleg_id: str) -> list[dict]:
+    rows = conn.execute(
+        "SELECT * FROM beleg_plaene WHERE beleg_id = ? ORDER BY version ASC", (beleg_id,)
+    ).fetchall()
+    ergebnis = []
+    for r in rows:
+        eintrag = dict(r)
+        eintrag["plan"] = json.loads(eintrag["plan_json"])
+        ergebnis.append(eintrag)
+    return ergebnis
 
 
 def agent_schritt_speichern(
@@ -224,7 +442,10 @@ def alle_belege(conn: sqlite3.Connection) -> list[dict]:
 def radar_uebersicht(conn: sqlite3.Connection) -> list[dict]:
     """Aktueller Radar-Zustand je Anbieter: die Einschaetzung des zuletzt
     uebernommenen Belegs dieses Anbieters (nach Einfuegereihenfolge, nicht
-    nach der nur sekundengenauen erfasst_am-Spalte)."""
+    nach der nur sekundengenauen erfasst_am-Spalte). Zeigt bewusst auch
+    offene Vergleichsfaelle, damit sie sichtbar bleiben -- nur die
+    Vergleichsbasis fuer den naechsten Preisvergleich folgt der strengeren
+    baseline_bestaetigt-Regel (siehe bestand.letzte_baseline)."""
     rows = conn.execute(
         """
         SELECT b.* FROM belege b

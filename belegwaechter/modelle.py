@@ -22,8 +22,20 @@ QUELLE_HINWEIS = "hinweis"
 RADAR_NEU = "neu"
 RADAR_STABIL = "stabil"
 RADAR_VERAENDERT_EINDEUTIG = "veraendert_eindeutig"
-RADAR_VERAENDERT_UNKLAR = "veraendert_unklar"
+RADAR_VERGLEICH_ERFORDERLICH = "vergleich_erforderlich"
 RADAR_BELEG_FEHLT = "beleg_fehlt"
+
+# Dokumentstatus: orthogonal zu `ausgang`, beschreibt den Paketzustand ohne
+# den (moeglicherweise offenen) Abovergleich mitzumeinen.
+DOKUMENTSTATUS_VORBEREITET = "vorbereitet"
+DOKUMENTSTATUS_ZURUECKGESTELLT = "zurueckgestellt"
+DOKUMENTSTATUS_AUSSORTIERT = "aussortiert"
+DOKUMENTSTATUS_FEHLGESCHLAGEN = "fehlgeschlagen"
+
+# Reviewstatus: haelt fest, ob eine konkrete, noch offene Pruefaufgabe
+# besteht, unabhaengig davon ob der Beleg bereits im vorbereiteten Paket ist.
+REVIEWSTATUS_KEINE = "keine"
+REVIEWSTATUS_OFFEN = "offen"
 
 
 @dataclass
@@ -59,13 +71,23 @@ class Beleg:
     dateityp: str
     stufe: str  # "A" | "B" | "C"
     quellenstatus: str
+    speichername: str = ""
+    storage_key: str | None = None
+    extraktionsmethode: str = "keine"
+    fehlercode: str | None = None
     felder: dict[str, ExtrahiertesFeld] = field(default_factory=dict)
     checkliste: list[Checkpunkt] = field(default_factory=list)
     ausgang: str | None = None
     begruendung: str | None = None
+    dokumentstatus: str | None = None
+    reviewstatus: str | None = None
+    review_aufgabe: str | None = None
+    baseline_bestaetigt: bool = False
+    betrag_dezimal: str | None = None
     radar_hinweis: str | None = None
     erfasst_am: str = ""
     schritte: list[AgentSchritt] = field(default_factory=list)
+    plaene: list = field(default_factory=list)
 
     def feldwert(self, name: str) -> str | None:
         f = self.felder.get(name)

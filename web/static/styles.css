@@ -279,6 +279,16 @@ main { max-width: 1120px; margin: 0 auto; padding: 8px 20px 40px; }
 #detail-checkliste li::before { content: "✓ "; color: var(--gruen-text); font-weight: 700; }
 #detail-checkliste li.check-fehlt::before { content: "✕ "; color: var(--gelb-text); }
 .entscheidung { font-size: 0.92rem; border-left: 3px solid var(--akzent); padding-left: 10px; margin: 4px 0 0; }
+.review-hinweis {
+  font-size: 0.88rem; color: var(--gelb-text); background: var(--gelb-bg);
+  border: 1px solid var(--gelb-linie); border-radius: 8px; padding: 8px 10px; margin: 8px 0 0;
+}
+.plan-karte {
+  border: 1px solid var(--linie); border-radius: 8px; padding: 10px 12px;
+  font-size: 0.88rem; margin-bottom: 8px;
+}
+.plan-karte ul { margin: 6px 0 0; padding-left: 18px; }
+.plan-revision { color: var(--akzent); font-weight: 600; margin: 0 0 4px; }
 
 .seiten-fuss {
   max-width: 1120px;

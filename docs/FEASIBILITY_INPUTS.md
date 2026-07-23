@@ -1,6 +1,6 @@
 # Feasibility-Gate: PDF- und Bild-Eingänge
 
-Datum: 24.07.2026 (Arbeitsblock 3). Zeitbox: 45 Minuten, eingehalten.
+Datum: 23.07.2026 (Arbeitsblock 3). Zeitbox: 45 Minuten, eingehalten.
 Umgebung: Windows 11, Python 3.14.3 (lokal installiert), pip 25.3.
 
 ---

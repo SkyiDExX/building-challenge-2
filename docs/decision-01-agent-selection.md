@@ -10,7 +10,7 @@ Status: Entschieden, wartet auf Abnahme durch Enrico vor Implementierungsstart
 - Challenge-Repo `https://github.com/SkyiDExX/building-challenge-2` wurde aus dem offiziellen Template erstellt, lokal geklont nach `C:\dev\building-challenge\building-challenge-2`, Branch `main`.
 - Template-Dateien gelesen: START.md, README.md, ABGABE.md, .env.example, .gitignore.
 - Abgaberegeln laut Template: Demo-Video 2 bis 3 Minuten, EIN Durchlauf, ungeschnitten, Bildschirmaufnahme reicht. Abgabe als Skool-Post mit Vorlage aus ABGABE.md. Mindestens ein Commit pro Bautag. Vorarbeit ist erlaubt, muss aber ehrlich genannt werden.
-- Optifyx-Repo `C:\dev\optifyx-workspace\agentic-os`: Branch `finalisierung/1.0`, HEAD `ba662800413ed17d95fda3a5d15e2ace48fa9df9`, working tree clean. Ausschließlich read-only untersucht. Keine `.db`-, `.env`- oder Nutzdaten-Dateien geöffnet, kein Code ausgeführt, kein Zugriff auf Port 8737.
+- Ein separates Vorarbeit-Repository (Optifyx OS) wurde ausschließlich read-only untersucht: working tree sauber, keine `.db`-, `.env`- oder Nutzdaten-Dateien geöffnet, kein Code ausgeführt, keine Produktionsdienste berührt.
 - Bisher wurde kein Optifyx-Code in dieses Repository übernommen.
 
 ## 2. Annahmen (keine Fakten)
@@ -30,18 +30,18 @@ Status: Entschieden, wartet auf Abnahme durch Enrico vor Implementierungsstart
 
 ## 4. Optifyx-Inventur (read-only, nur Muster, kein Code kopiert)
 
-| Muster | Dateipfad (Optifyx) | Belegte Funktion | Nutzen für Challenge-Agent | Kategorie | Risiko / fehlende Evidenz |
-|---|---|---|---|---|---|
-| UI-Shell | `app/index.html`, `app/app.js`, `app/styles.css` | Vanilla JS, Hash-Routing mit Deep-Links, Dark Mode via `data-theme`, Stale-Banner, responsive Breakpoints | Vorbild für eine kleine lokale Ergebnis-Ansicht | UX-Muster | Bei 7500 Zeilen unübersichtlich; für Challenge nur Prinzip übernehmen |
-| Datenservice | `service/server.py`, `docs/adr/ADR-003` | Reine Python-stdlib `http.server`, hart auf 127.0.0.1, Portkonflikt-Erkennung, kein CORS | Lokaler Single-User-Dienst ohne Dependencies | Architekturwissen | Kein Beleg, dass das Muster für Datei-Uploads geeignet ist |
-| Persistenz | `service/datenbank.py` (MIGRATIONEN ab Z.132) | SQLite, WAL, nummerierte append-only Migrationen, `schema_version`, CHECK-Enums | Gleiche Migrationstechnik neu schreiben | Architekturwissen | - |
-| Auditlog | `service/datenbank.py` Z.178, Z.550 | Tabelle `audit_ereignisse` mit alt/neu-Zustand, Aktion, Quelle je Schreibvorgang | Kern der Nachvollziehbarkeit des Belegpakets | Sicherheitsmuster | - |
-| Provenienz | `service/datenbank.py` Migration 009 (`beleg_*`-Spalten) | Trennung Import-Herkunft vs. Analyse-Herkunft, Ergebnisse verweisen auf Beleg | Direkt übertragbar: jedes Extrakt verweist auf Original-Datei plus Extraktionslauf | Sicherheitsmuster | - |
-| Fail-closed Validierung | `service/validierung.py` | Whitelist Feld zu Prüffunktion, unbekannte Felder sind Fehler, wertfreie Fehlermeldungen | Unvollständige Belege landen im Review statt still übernommen | Sicherheitsmuster | - |
-| Review-Bucket | `service/datenbank.py` (`migration_review`) | Unklare Fälle werden gesammelt statt verworfen | Muster für "Beleg unklar, Mensch entscheidet" | Sicherheitsmuster | - |
-| Mail-Wache | `service/mail_wache.py` | IMAP-IDLE Daemon, debounced Subprozess-Sync, Backoff, Status in DB | Später: Postfach-Überwachung für echte Belege; nicht im MVP | Architekturwissen | Nur Code gelesen, nie ausgeführt |
-| Test-Isolation | `tests/test_datenservice.py` Z.40-51 | Temp-DB via `mkdtemp`, Server auf Port 0, synthetische Fixtures, Produktions-DB nie geöffnet | Von Tag 1 übernehmen: Test- und Demo-Daten strikt getrennt | Testmuster | - |
-| Fehler-UX | `app/app.js` Z.117, Z.747 | Fehler nie still verschluckt, ehrliche Zustandsbadges, Stale-Banner | Vertrauensbildend für die Demo | UX-Muster | - |
+| Muster | Belegte Funktion | Nutzen für Challenge-Agent | Kategorie | Risiko / fehlende Evidenz |
+|---|---|---|---|---|
+| UI-Shell | Vanilla JS, Hash-Routing mit Deep-Links, Dark Mode via `data-theme`, Stale-Banner, responsive Breakpoints | Vorbild für eine kleine lokale Ergebnis-Ansicht | UX-Muster | Im Original unübersichtlich groß; für Challenge nur Prinzip übernehmen |
+| Datenservice | Reine Python-stdlib `http.server`, hart auf 127.0.0.1, Portkonflikt-Erkennung, kein CORS | Lokaler Single-User-Dienst ohne Dependencies | Architekturwissen | Kein Beleg, dass das Muster für Datei-Uploads geeignet ist |
+| Persistenz | SQLite, WAL, nummerierte append-only Migrationen, `schema_version`, CHECK-Enums | Gleiche Migrationstechnik neu schreiben | Architekturwissen | - |
+| Auditlog | Tabelle mit alt/neu-Zustand, Aktion, Quelle je Schreibvorgang | Kern der Nachvollziehbarkeit des Belegpakets | Sicherheitsmuster | - |
+| Provenienz | Trennung Import-Herkunft vs. Analyse-Herkunft, Ergebnisse verweisen auf Beleg | Direkt übertragbar: jedes Extrakt verweist auf Original-Datei plus Extraktionslauf | Sicherheitsmuster | - |
+| Fail-closed Validierung | Whitelist Feld zu Prüffunktion, unbekannte Felder sind Fehler, wertfreie Fehlermeldungen | Unvollständige Belege landen im Review statt still übernommen | Sicherheitsmuster | - |
+| Review-Bucket | Unklare Fälle werden gesammelt statt verworfen | Muster für "Beleg unklar, Mensch entscheidet" | Sicherheitsmuster | - |
+| Mail-Wache | IMAP-IDLE Daemon, debounced Subprozess-Sync, Backoff, Status in DB | Später: Postfach-Überwachung für echte Belege; nicht im MVP | Architekturwissen | Nur Code gelesen, nie ausgeführt |
+| Test-Isolation | Temp-DB via `mkdtemp`, Server auf Port 0, synthetische Fixtures, Produktions-DB nie geöffnet | Von Tag 1 übernehmen: Test- und Demo-Daten strikt getrennt | Testmuster | - |
+| Fehler-UX | Fehler nie still verschluckt, ehrliche Zustandsbadges, Stale-Banner | Vertrauensbildend für die Demo | UX-Muster | - |
 
 Kategorie "eventuell später transparent übernehmbarer Code": keine Datei in dieser Runde. Alles wird bei Bedarf neu geschrieben und die Herkunft der Idee dokumentiert.
 

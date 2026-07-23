@@ -1,8 +1,11 @@
 # Belegwächter — SKAILE Building Challenge #2
 
-> Stand Arbeitsblock 3 (24.07.2026): Erster echter End-to-End-Vertical-Slice
-> läuft. Zentrale, manuelle Kosten-Inbox: Belege werden manuell zugeführt,
-> die Verarbeitung danach läuft vollständig agentisch und autonom.
+> Stand Arbeitsblock 3 (23.07.2026): Erster echter End-to-End-Vertical-Slice
+> läuft. Zentrale, manuelle Kosten-Inbox: Belege werden manuell zugeführt.
+> Der Belegwächter ist ein regelbasierter, zustandsabhängiger Agent. Er
+> erstellt pro Eingang einen Ausführungsplan, wählt notwendige
+> Prüfwerkzeuge, überspringt ungeeignete Schritte und entscheidet anhand
+> von Evidenz und vorhandenem Bestand über die nächste Aktion.
 
 ## Das Problem
 
@@ -66,17 +69,39 @@ Abo-Vergleich ist regelbasiert auf den vier extrahierten Dimensionen
 Rabatt/Gutschrift werden in diesem Slice nicht separat geprüft, da keine
 Fixture sie variiert (siehe `belegwaechter/radar.py`).
 
+Upload-Dateinamen werden bereinigt: der Originalname bleibt nur als
+Anzeigename erhalten, gespeichert wird ein aus Hash und einer harten
+Zeichen-Whitelist gebildeter Name (siehe `belegwaechter/dateinamen.py`).
+Dateiendung und Dateisignatur müssen übereinstimmen, sonst landet der Beleg
+in Review statt automatisch übernommen zu werden. Transportfehler (Datei
+oder Charge zu groß, zu viele Dateien, falscher Content-Type) lehnen die
+gesamte Charge ab, bevor irgendetwas gespeichert wird; fachliche Fehler
+(defektes PDF, fehlender Originalbeleg) betreffen nur die jeweilige Datei,
+die restliche Charge läuft weiter. Ein unklarer Preisvergleich nimmt den
+Beleg zwar ins vorbereitete Paket auf, zählt aber nicht automatisch als
+bestätigte Vergleichsbasis für den nächsten Preisvergleich (siehe
+`dokumentstatus`/`reviewstatus`/`review_aufgabe` in der Ergebnis-API).
+CSV-Export: Textspalten werden gegen Formel-Injektion escaped, Beträge
+werden ausschließlich aus dem intern kanonisierten Dezimalwert exportiert,
+nie aus dem Rohtext des Dokuments.
+
 ## Warum das ein Agent ist, kein Parser
 
-Der Ablauf verzweigt je nach Zustand: Stufe A bekommt volle Extraktion,
-Stufe B wird bewusst übersprungen und direkt in Review geroutet. Ob ein
-Preis "eindeutig teurer", "Vergleich erforderlich" oder "erste Erfassung"
-ist, hängt vom vorhandenen Bestand ab, nicht von einer festen Regel pro
-Datei. Jeder Lauf erzeugt einen echten, protokollierten Schritteverlauf
-(10 Schritte je Beleg: Wahrnehmen, Planen, Werkzeuge ausführen, Bewerten,
-Handeln, Erklären, Erinnern — Details in `docs/MASTER_PLAN.md` Abschnitt 30b).
-Für dieselbe Datei kann die Entscheidung unterschiedlich ausfallen, je
-nachdem was vorher schon verarbeitet wurde.
+Der Belegwächter erstellt pro Eingang einen echten Ausführungsplan
+(`belegwaechter/planen.py`): abhängig von Quellenklasse und Dateisignatur
+wählt er, welche Werkzeuge laufen (Extraktion, Checkliste, Bestandsabgleich,
+Abo-Radar) und welche übersprungen werden, jeweils mit Begründung. Neue
+Evidenz während der Verarbeitung — ein Lesefehler, eine erkannte Dublette,
+eine unvollständige Checkliste — löst eine protokollierte Planrevision aus,
+die zum Beispiel das Abo-Radar nachträglich deaktiviert. Der Executor fragt
+ausschließlich diesen Plan ab; er verzweigt nirgends ein zweites Mal
+eigenständig. Ob ein Preis "eindeutig teurer", "Vergleich erforderlich" oder
+"erste Erfassung" ist, hängt von der bestätigten Vergleichsbasis im Bestand
+ab, nicht von einer festen Regel pro Datei. Jeder Lauf erzeugt einen echten,
+protokollierten Schritteverlauf (Wahrnehmen, Planen, Werkzeuge ausführen,
+Bewerten, Handeln, Erklären, Erinnern — Details in `docs/MASTER_PLAN.md`
+Abschnitt 30b). Für dieselbe Datei kann die Entscheidung unterschiedlich
+ausfallen, je nachdem was vorher schon verarbeitet wurde.
 
 ## Bekannte Einschränkungen (Stand Arbeitsblock 3)
 

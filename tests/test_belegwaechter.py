@@ -23,7 +23,18 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 FIXTURES = REPO_ROOT / "fixtures"
 
-from belegwaechter import agent, dateien, dateinamen, entscheiden, extrahieren, fehlertexte, mailparser, speicher  # noqa: E402
+from belegwaechter import (  # noqa: E402
+    agent,
+    dateien,
+    dateinamen,
+    dokumentart,
+    entscheiden,
+    extrahieren,
+    fehlertexte,
+    mailparser,
+    speicher,
+    vorgang,
+)
 from belegwaechter.modelle import (  # noqa: E402
     AUSGANG_DUBLETTE,
     AUSGANG_FEHLGESCHLAGEN,
@@ -173,9 +184,9 @@ class AuditUndProvenienzTest(IsolierteDatenbankTestCase):
         namen = [s["schritt"] for s in schritte]
         erwartete_schritte = [
             "Eingang erkannt", "Quellenqualitaet bewertet", "Ausfuehrungsplan erstellt",
-            "Felder extrahiert", "Vollstaendigkeit geprueft", "Bestand abgeglichen",
-            "Abovergleich bewertet", "Entscheidung getroffen", "Ergebnis gespeichert",
-            "Auditverlauf aktualisiert",
+            "Felder extrahiert", "Dokumentart bestimmt", "Vollstaendigkeit geprueft",
+            "Bestand abgeglichen", "Abovergleich bewertet", "Entscheidung getroffen",
+            "Ergebnis gespeichert", "Auditverlauf aktualisiert",
         ]
         self.assertEqual(namen, erwartete_schritte)
 
@@ -617,7 +628,7 @@ class MigrationTest(unittest.TestCase):
 
         conn = speicher.verbindung()
         version = conn.execute("SELECT version FROM schema_version").fetchone()[0]
-        self.assertEqual(version, 2)
+        self.assertEqual(version, len(speicher.MIGRATIONEN))
 
         zeilen = {r["id"]: dict(r) for r in conn.execute("SELECT * FROM belege").fetchall()}
         self.assertEqual(len(zeilen), 2)
@@ -649,7 +660,7 @@ class MigrationTest(unittest.TestCase):
         conn.close()
 
         conn2 = speicher.verbindung()
-        self.assertEqual(conn2.execute("SELECT version FROM schema_version").fetchone()[0], 2)
+        self.assertEqual(conn2.execute("SELECT version FROM schema_version").fetchone()[0], len(speicher.MIGRATIONEN))
         self.assertEqual(conn2.execute("SELECT COUNT(*) FROM belege").fetchone()[0], 2)
         conn2.close()
 
@@ -1054,6 +1065,374 @@ class MailparserTest(unittest.TestCase):
         self.assertEqual(eml.text, "")
         self.assertEqual(eml.text_quelle, "keine")
         self.assertEqual(eml.anhaenge, [])
+
+
+class DokumentartTest(unittest.TestCase):
+    """Regelbasierte Dokumentart-Einordnung: deterministisch, feste
+    Prioritaet, fail-closed."""
+
+    def test_zahlungsbeleg_hat_vorrang_vor_rechnung(self):
+        art, begruendung = dokumentart.klassifizieren(
+            "Zahlungsbeleg\nZahlung erhalten zur Rechnung Nr. RE-1"
+        )
+        self.assertEqual(art, "zahlungsbeleg")
+        self.assertIn("zahlungsbeleg", begruendung.lower())
+
+    def test_abo_bestaetigung_hat_vorrang_vor_rechnung(self):
+        art, _ = dokumentart.klassifizieren("Ihr Abo verlaengert sich am 05.08.2026. Rechnung folgt.")
+        self.assertEqual(art, "abo_bestaetigung")
+
+    def test_rechnung_wird_erkannt(self):
+        art, _ = dokumentart.klassifizieren("CloudBasis GmbH\nRechnung Nr. RE-1")
+        self.assertEqual(art, "rechnung")
+
+    def test_betrag_ohne_schluesselwort_ist_sonstiger_kostennachweis(self):
+        art, _ = dokumentart.klassifizieren("Unvollstaendig AG\nDatum: 01.07.2026", betrag_vorhanden=True)
+        self.assertEqual(art, "sonstiger_kostennachweis")
+
+    def test_ohne_evidenz_fail_closed_unbestimmt(self):
+        art, begruendung = dokumentart.klassifizieren("")
+        self.assertEqual(art, "unbestimmt")
+        self.assertIn("geraten", begruendung)
+
+    def test_anbietername_mit_zahl_wortstamm_ist_kein_zahlungsbeleg(self):
+        art, _ = dokumentart.klassifizieren("Zahlbar GmbH\nRechnung Nr. ZB-1")
+        self.assertEqual(art, "rechnung")
+
+
+class DokumentartWerkzeugTest(IsolierteDatenbankTestCase):
+    """Das Werkzeug 'dokumentart' laeuft im Plan, wird protokolliert und
+    unterliegt den Planinvarianten."""
+
+    def test_pdf_rechnung_bekommt_dokumentart_und_schritt(self):
+        beleg = agent.verarbeite_datei(
+            self.conn, speicher.neuer_lauf(self.conn), "domainly_juli.pdf", _lesen("domainly_juli.pdf")
+        )
+        self.assertEqual(beleg.dokumentart, "rechnung")
+        self.assertTrue(beleg.plaene[-1].werkzeug_aktiv("dokumentart"))
+        schritt = [s for s in beleg.schritte if s.schritt == "Dokumentart bestimmt"][0]
+        self.assertEqual(schritt.status, "ok")
+        self.assertEqual(schritt.werkzeug, "dokumentart-regeln")
+        gespeichert = speicher.alle_belege(self.conn)[0]
+        self.assertEqual(gespeichert["dokumentart"], "rechnung")
+
+    def test_screenshot_ohne_text_bleibt_unbestimmt_und_uebersprungen(self):
+        beleg = agent.verarbeite_datei(
+            self.conn, speicher.neuer_lauf(self.conn), "mobiltel_screenshot.png", _lesen("mobiltel_screenshot.png")
+        )
+        self.assertEqual(beleg.dokumentart, "unbestimmt")
+        self.assertFalse(beleg.plaene[-1].werkzeug_aktiv("dokumentart"))
+        schritt = [s for s in beleg.schritte if s.schritt == "Dokumentart bestimmt"][0]
+        self.assertEqual(schritt.status, "uebersprungen")
+
+
+class EmlVorgangTest(IsolierteDatenbankTestCase):
+    """Akzeptanzkern: eine EML mit Rechnung und Zahlungsbeleg ergibt genau
+    einen Kostenvorgang mit zwei getrennten Dokumenten."""
+
+    def test_eine_eml_ergibt_einen_vorgang_mit_zwei_getrennten_dokumenten(self):
+        vorgang_obj, belege = agent.verarbeite_eml(
+            self.conn, speicher.neuer_lauf(self.conn),
+            "cloudbasis_rechnung_und_zahlung.eml", _lesen("cloudbasis_rechnung_und_zahlung.eml"),
+        )
+        self.assertEqual(len(belege), 2)
+        self.assertEqual(sorted(b.dokumentart for b in belege), ["rechnung", "zahlungsbeleg"])
+        self.assertEqual([b.ausgang for b in belege], [AUSGANG_UEBERNOMMEN, AUSGANG_UEBERNOMMEN],
+                         "Rechnung und Zahlungsbeleg desselben Vorgangs sind keine Dubletten")
+        for beleg in belege:
+            self.assertEqual(beleg.vorgang_id, vorgang_obj.id)
+        vorgaenge = speicher.vorgaenge_liste(self.conn)
+        self.assertEqual(len(vorgaenge), 1)
+        self.assertEqual(vorgaenge[0]["id"], vorgang_obj.id)
+        self.assertEqual(len(speicher.alle_belege(self.conn)), 2, "Der EML-Container ist kein Beleg")
+
+    def test_leistungszeitraum_ergibt_hoechstens_beleg_erwartet(self):
+        vorgang_obj, _ = agent.verarbeite_eml(
+            self.conn, speicher.neuer_lauf(self.conn),
+            "cloudbasis_rechnung_und_zahlung.eml", _lesen("cloudbasis_rechnung_und_zahlung.eml"),
+        )
+        self.assertEqual(vorgang_obj.naechste_aktivitaet_art, "beleg")
+        self.assertEqual(vorgang_obj.naechste_aktivitaet_status, "erwartet")
+        self.assertNotEqual(vorgang_obj.naechste_aktivitaet_status, "bestaetigt")
+        self.assertNotEqual(vorgang_obj.naechste_aktivitaet_art, "zahlung",
+                            "Ein Leistungszeitraum ist nie eine Zahlungszusage")
+
+    def test_zahlungsbeleg_wird_nie_preisbaseline(self):
+        _, belege = agent.verarbeite_eml(
+            self.conn, speicher.neuer_lauf(self.conn),
+            "cloudbasis_rechnung_und_zahlung.eml", _lesen("cloudbasis_rechnung_und_zahlung.eml"),
+        )
+        rechnung = [b for b in belege if b.dokumentart == "rechnung"][0]
+        zahlungsbeleg = [b for b in belege if b.dokumentart == "zahlungsbeleg"][0]
+        self.assertTrue(rechnung.baseline_bestaetigt)
+        self.assertFalse(zahlungsbeleg.baseline_bestaetigt)
+        self.assertFalse(zahlungsbeleg.plaene[-1].werkzeug_aktiv("radar"))
+
+    def test_container_plan_steuert_textkoerper_als_protokollierte_revision(self):
+        vorgang_obj, _ = agent.verarbeite_eml(
+            self.conn, speicher.neuer_lauf(self.conn),
+            "cloudbasis_rechnung_und_zahlung.eml", _lesen("cloudbasis_rechnung_und_zahlung.eml"),
+        )
+        container_plaene = self.conn.execute(
+            "SELECT beleg_id, vorgang_id, version, revisionsgrund FROM beleg_plaene "
+            "WHERE vorgang_id = ? AND beleg_id IS NULL ORDER BY version ASC",
+            (vorgang_obj.id,),
+        ).fetchall()
+        self.assertEqual(len(container_plaene), 2, "Textkoerper-Deaktivierung muss eine Planrevision sein")
+        self.assertIn("Begleittext", container_plaene[1]["revisionsgrund"])
+        fremde_beleg_ids = self.conn.execute(
+            "SELECT COUNT(*) FROM beleg_plaene WHERE beleg_id = ?", (vorgang_obj.id,)
+        ).fetchone()[0]
+        self.assertEqual(fremde_beleg_ids, 0, "Eine vorgang_id darf nie im beleg_id-Feld stehen")
+
+    def test_mailtext_rechnung_wird_eigener_beleg(self):
+        vorgang_obj, belege = agent.verarbeite_eml(
+            self.conn, speicher.neuer_lauf(self.conn),
+            "domainly_nur_html_rechnung.eml", _lesen("domainly_nur_html_rechnung.eml"),
+        )
+        self.assertEqual(len(belege), 1)
+        beleg = belege[0]
+        self.assertEqual(beleg.plaene[0].quellenklasse, "mailtext")
+        self.assertEqual(beleg.dokumentart, "rechnung")
+        self.assertEqual(beleg.ausgang, AUSGANG_UEBERNOMMEN)
+        self.assertEqual(beleg.feldwert("betrag"), "9,00")
+        self.assertEqual(beleg.vorgang_id, vorgang_obj.id)
+
+    def test_abo_bestaetigung_mit_explizitem_datum_ist_bestaetigt(self):
+        vorgang_obj, belege = agent.verarbeite_eml(
+            self.conn, speicher.neuer_lauf(self.conn),
+            "schreibki_abo_bestaetigung.eml", _lesen("schreibki_abo_bestaetigung.eml"),
+        )
+        self.assertEqual(vorgang_obj.naechste_aktivitaet_art, "zahlung")
+        self.assertEqual(vorgang_obj.naechste_aktivitaet_status, "bestaetigt")
+        self.assertEqual(vorgang_obj.naechste_aktivitaet_datum, "05.08.2026")
+        self.assertEqual(belege[0].dokumentart, "abo_bestaetigung")
+
+
+class HashDuplikatTest(IsolierteDatenbankTestCase):
+    def test_erneuter_upload_desselben_anhangs_ist_datei_duplikat(self):
+        lauf = speicher.neuer_lauf(self.conn)
+        agent.verarbeite_eml(
+            self.conn, lauf, "cloudbasis_rechnung_und_zahlung.eml", _lesen("cloudbasis_rechnung_und_zahlung.eml")
+        )
+        anhang = mailparser.zerlegen(_lesen("cloudbasis_rechnung_und_zahlung.eml")).anhaenge[0]
+        wiederholung = agent.verarbeite_datei(self.conn, lauf, anhang.dateiname, anhang.inhalt)
+        self.assertEqual(wiederholung.ausgang, AUSGANG_DUBLETTE)
+        self.assertIn("byte-identisch", wiederholung.begruendung)
+        bestand = speicher.bestand_uebernommen(self.conn)
+        self.assertEqual(len(bestand), 2, "Das Datei-Duplikat darf den Bestand nicht vergroessern")
+
+    def test_wiederholter_screenshot_bleibt_original_anfordern(self):
+        lauf = speicher.neuer_lauf(self.conn)
+        agent.verarbeite_datei(self.conn, lauf, "mobiltel_screenshot.png", _lesen("mobiltel_screenshot.png"))
+        wiederholung = agent.verarbeite_datei(
+            self.conn, lauf, "mobiltel_screenshot.png", _lesen("mobiltel_screenshot.png")
+        )
+        self.assertEqual(wiederholung.ausgang, AUSGANG_ORIGINAL_ANFORDERN,
+                         "Hash-Duplikate werden nur gegen uebernommene Belege geprueft")
+
+
+class DokumentartDubletteTest(IsolierteDatenbankTestCase):
+    """Gleiche Referenz, gleicher Betrag, gleiches Datum: nur bei gleicher
+    Dokumentart eine Dublette."""
+
+    _RECHNUNG = [
+        "CloudBasis GmbH", "Rechnung Nr. RE-7001", "Datum: 01.08.2026",
+        "Leistungszeitraum: monatlich", "Tarif: Standard",
+        "Betrag: 19,00 EUR", "Waehrung: EUR",
+    ]
+    _ZAHLUNGSBELEG = [
+        "CloudBasis GmbH", "Zahlungsbeleg", "Zahlung erhalten zur Rechnung Nr. RE-7001",
+        "Datum: 01.08.2026", "Leistungszeitraum: monatlich", "Tarif: Standard",
+        "Betrag: 19,00 EUR", "Waehrung: EUR",
+    ]
+
+    def test_andere_dokumentart_ist_keine_dublette(self):
+        lauf = speicher.neuer_lauf(self.conn)
+        agent.verarbeite_datei(self.conn, lauf, "rechnung.pdf", _synthetische_rechnung(self._RECHNUNG))
+        zahlungsbeleg = agent.verarbeite_datei(
+            self.conn, lauf, "zahlungsbeleg.pdf", _synthetische_rechnung(self._ZAHLUNGSBELEG)
+        )
+        self.assertEqual(zahlungsbeleg.dokumentart, "zahlungsbeleg")
+        self.assertEqual(zahlungsbeleg.ausgang, AUSGANG_UEBERNOMMEN)
+
+    def test_gleiche_dokumentart_bleibt_dublette(self):
+        lauf = speicher.neuer_lauf(self.conn)
+        agent.verarbeite_datei(self.conn, lauf, "rechnung.pdf", _synthetische_rechnung(self._RECHNUNG))
+        erneut = agent.verarbeite_datei(
+            self.conn, lauf, "rechnung_erneut.pdf",
+            _synthetische_rechnung(["Erneuter Versand"] + self._RECHNUNG),
+        )
+        self.assertEqual(erneut.ausgang, AUSGANG_DUBLETTE)
+        self.assertIn("RE-7001", erneut.begruendung)
+
+
+class NaechsteAktivitaetTest(unittest.TestCase):
+    """Naechste Aktivitaet nur mit Evidenz: bestaetigt, erwartet oder
+    unbekannt. Keine Schaetzung."""
+
+    def test_explizites_verlaengerungsdatum_ist_bestaetigte_zahlung(self):
+        art, status, datum, begruendung = vorgang.naechste_aktivitaet(
+            ["Ihr Abo verlaengert sich am 05.08.2026."]
+        )
+        self.assertEqual((art, status, datum), ("zahlung", "bestaetigt", "05.08.2026"))
+        self.assertIn("bestaetigt", begruendung)
+
+    def test_leistungszeitraum_ist_hoechstens_erwarteter_beleg(self):
+        art, status, datum, begruendung = vorgang.naechste_aktivitaet(["01.08.2026 - 31.08.2026"])
+        self.assertEqual((art, status, datum), ("beleg", "erwartet", "31.08.2026"))
+        self.assertNotEqual(status, "bestaetigt")
+        self.assertIn("keine Aussage ueber eine sichere naechste Zahlung", begruendung)
+
+    def test_verlaengerungsdatum_hat_vorrang_vor_zeitraum(self):
+        art, status, datum, _ = vorgang.naechste_aktivitaet(
+            ["Verlaengerung am 01.09.2026", "01.08.2026 - 31.08.2026"]
+        )
+        self.assertEqual((art, status, datum), ("zahlung", "bestaetigt", "01.09.2026"))
+
+    def test_ohne_evidenz_unbekannt_ohne_art_und_datum(self):
+        art, status, datum, _ = vorgang.naechste_aktivitaet(["Vielen Dank fuer Ihre Zahlung."])
+        self.assertIsNone(art)
+        self.assertEqual(status, "unbekannt")
+        self.assertIsNone(datum)
+
+
+class ZahlungOhneRechnungTest(IsolierteDatenbankTestCase):
+    def test_zahlungsbestaetigung_ohne_rechnung_erzeugt_anforderungsaufgabe(self):
+        vorgang_obj, belege = agent.verarbeite_eml(
+            self.conn, speicher.neuer_lauf(self.conn),
+            "mobiltel_zahlungsbestaetigung.eml", _lesen("mobiltel_zahlungsbestaetigung.eml"),
+        )
+        self.assertEqual(len(belege), 1)
+        beleg = belege[0]
+        self.assertEqual(beleg.dokumentart, "zahlungsbeleg")
+        self.assertEqual(beleg.reviewstatus, REVIEWSTATUS_OFFEN)
+        self.assertEqual(beleg.review_aufgabe, "Rechnung oder Originalbeleg anfordern")
+        gespeichert = speicher.alle_belege(self.conn)[0]
+        self.assertEqual(gespeichert["review_aufgabe"], "Rechnung oder Originalbeleg anfordern")
+        self.assertEqual(vorgang_obj.naechste_aktivitaet_status, "unbekannt")
+
+    def test_zahlungsbeleg_mit_rechnung_im_vorgang_braucht_keine_anforderung(self):
+        _, belege = agent.verarbeite_eml(
+            self.conn, speicher.neuer_lauf(self.conn),
+            "cloudbasis_rechnung_und_zahlung.eml", _lesen("cloudbasis_rechnung_und_zahlung.eml"),
+        )
+        zahlungsbeleg = [b for b in belege if b.dokumentart == "zahlungsbeleg"][0]
+        self.assertNotEqual(zahlungsbeleg.review_aufgabe, "Rechnung oder Originalbeleg anfordern")
+
+
+class EmlDeterminismusTest(IsolierteDatenbankTestCase):
+    def test_identischer_eml_wiederholungslauf_liefert_gleiches_ergebnis(self):
+        namen = [
+            "cloudbasis_rechnung_und_zahlung.eml", "schreibki_abo_bestaetigung.eml",
+            "mobiltel_zahlungsbestaetigung.eml", "domainly_nur_html_rechnung.eml",
+        ]
+
+        def _lauf() -> tuple:
+            lauf = speicher.neuer_lauf(self.conn)
+            ergebnis = []
+            for name in namen:
+                vorgang_obj, belege = agent.verarbeite_eml(self.conn, lauf, name, _lesen(name))
+                ergebnis.append(
+                    (
+                        vorgang_obj.betreff,
+                        vorgang_obj.naechste_aktivitaet_art,
+                        vorgang_obj.naechste_aktivitaet_status,
+                        vorgang_obj.naechste_aktivitaet_datum,
+                        vorgang_obj.naechste_aktivitaet_begruendung,
+                        [(b.dateiname, b.dokumentart, b.ausgang, b.begruendung, b.review_aufgabe) for b in belege],
+                    )
+                )
+            return tuple(ergebnis)
+
+        erster = _lauf()
+        self.conn.close()
+        speicher.reset()
+        self.conn = speicher.verbindung()
+        zweiter = _lauf()
+        self.assertEqual(erster, zweiter)
+
+
+class Migration3Test(unittest.TestCase):
+    """Eine bestehende v2-Datenbank migriert sicher auf v3: Backfill ohne
+    Raten, neue vorgaenge-Tabelle, optionale beleg_id in beleg_plaene."""
+
+    def setUp(self) -> None:
+        self._tempdir = tempfile.mkdtemp(prefix="belegwaechter_migration3_test_")
+        self.runtime_dir = Path(self._tempdir) / "runtime"
+        self.db_pfad = self.runtime_dir / "belegwaechter.db"
+        self.runtime_dir.mkdir(parents=True)
+        (self.runtime_dir / "eingang").mkdir()
+
+        self._original_runtime = speicher.RUNTIME_DIR
+        self._original_eingang = speicher.EINGANG_DIR
+        self._original_db = speicher.DB_PFAD
+        speicher.RUNTIME_DIR = self.runtime_dir
+        speicher.EINGANG_DIR = self.runtime_dir / "eingang"
+        speicher.DB_PFAD = self.db_pfad
+
+    def tearDown(self) -> None:
+        speicher.RUNTIME_DIR = self._original_runtime
+        speicher.EINGANG_DIR = self._original_eingang
+        speicher.DB_PFAD = self._original_db
+        shutil.rmtree(self._tempdir, ignore_errors=True)
+
+    def _v2_db_bauen(self) -> None:
+        conn = sqlite3.connect(self.db_pfad)
+        conn.execute("CREATE TABLE schema_version (version INTEGER NOT NULL)")
+        speicher._migration_001_initial_schema(conn)
+        speicher._migration_002_provenienz_status_und_plan(conn)
+        conn.execute("INSERT INTO schema_version (version) VALUES (2)")
+        conn.execute("INSERT INTO laeufe (id, gestartet_am) VALUES ('lauf-1', datetime('now'))")
+        conn.execute(
+            """
+            INSERT INTO belege (
+                id, lauf_id, dateiname, dateihash, dateipfad, dateityp, stufe, quellenstatus,
+                referenz, felder_json, checkliste_json, ausgang, begruendung, erfasst_am
+            ) VALUES (
+                'beleg-v2', 'lauf-1', 'rechnung.pdf', 'hash1', '', 'PDF', 'A', 'original_vorhanden',
+                'RE-1', '{}', '[]', 'uebernommen', 'Uebernommen: Test.', datetime('now')
+            )
+            """
+        )
+        conn.execute(
+            "INSERT INTO beleg_plaene (lauf_id, beleg_id, version, plan_json, revisionsgrund, erstellt_am) "
+            "VALUES ('lauf-1', 'beleg-v2', 1, '{}', NULL, datetime('now'))"
+        )
+        conn.commit()
+        conn.close()
+
+    def test_v2_migriert_ohne_raten_auf_v3(self):
+        self._v2_db_bauen()
+
+        conn = speicher.verbindung()
+        self.assertEqual(conn.execute("SELECT version FROM schema_version").fetchone()[0], 3)
+
+        beleg = conn.execute("SELECT * FROM belege WHERE id = 'beleg-v2'").fetchone()
+        self.assertEqual(beleg["dokumentart"], "unbestimmt", "Backfill darf nie eine Dokumentart raten")
+        self.assertIsNone(beleg["vorgang_id"])
+
+        self.assertIsNotNone(
+            conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='vorgaenge'").fetchone()
+        )
+
+        alte_plaene = conn.execute("SELECT * FROM beleg_plaene WHERE beleg_id = 'beleg-v2'").fetchall()
+        self.assertEqual(len(alte_plaene), 1, "Bestehende Plaene muessen die Migration ueberleben")
+
+        conn.execute(
+            "INSERT INTO beleg_plaene (lauf_id, beleg_id, vorgang_id, version, plan_json, erstellt_am) "
+            "VALUES ('lauf-1', NULL, 'vorgang-1', 1, '{}', datetime('now'))"
+        )
+        conn.execute(
+            "INSERT INTO agent_schritte (lauf_id, beleg_id, vorgang_id, schritt, status, werkzeug, "
+            "begruendung, start, ende) VALUES ('lauf-1', NULL, 'vorgang-1', 'EML zerlegt', 'ok', "
+            "'mail-parser', 'Test', '', '')"
+        )
+        conn.commit()
+
+        sicherung = self.runtime_dir / "belegwaechter.db.vor-migration-v3"
+        self.assertTrue(sicherung.exists(), "Sicherungskopie vor Migration 3 muss existieren")
+        conn.close()
 
 
 if __name__ == "__main__":

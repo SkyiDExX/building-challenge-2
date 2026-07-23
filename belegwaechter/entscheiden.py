@@ -67,6 +67,14 @@ def entscheiden(
         )
 
     if dublette_treffer:
+        if dublette_treffer.get("_grund") == "datei-hash":
+            return (
+                AUSGANG_DUBLETTE,
+                "Doppelt, aussortiert: diese Datei ist byte-identisch mit dem "
+                f"bereits uebernommenen Beleg '{dublette_treffer['dateiname']}' "
+                "(gleicher Datei-Hash). Nicht doppelt gezaehlt.",
+                None,
+            )
         referenz = beleg.feldwert("referenz")
         betrag = beleg.feldwert("betrag")
         return (

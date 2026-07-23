@@ -206,7 +206,61 @@ def _v1_zeilen_uebernehmen(conn: sqlite3.Connection) -> None:
         )
 
 
-MIGRATIONEN = [_migration_001_initial_schema, _migration_002_provenienz_status_und_plan]
+def _migration_003_dokumentart_und_vorgaenge(conn: sqlite3.Connection) -> None:
+    """Fuehrt Dokumentart, Kostenvorgaenge und die Vorgangszuordnung von
+    Plaenen und Agentenschritten ein. Bestehende Belege erhalten
+    deterministisch dokumentart='unbestimmt' und vorgang_id=NULL (kein
+    rueckwirkendes Raten). beleg_plaene wird einmalig kopierend neu
+    aufgebaut, damit beleg_id optional wird: Container-Eintraege einer EML
+    tragen NUR eine vorgang_id, nie eine vorgang_id im beleg_id-Feld."""
+    for anweisung in (
+        "ALTER TABLE belege ADD COLUMN dokumentart TEXT",
+        "ALTER TABLE belege ADD COLUMN vorgang_id TEXT",
+        "UPDATE belege SET dokumentart = 'unbestimmt'",
+        "ALTER TABLE agent_schritte ADD COLUMN vorgang_id TEXT",
+        """
+        CREATE TABLE vorgaenge (
+            id TEXT PRIMARY KEY,
+            lauf_id TEXT NOT NULL,
+            quelle TEXT NOT NULL,
+            eml_dateiname TEXT,
+            eml_hash TEXT,
+            eml_storage_key TEXT,
+            betreff TEXT,
+            absender TEXT,
+            mail_datum TEXT,
+            naechste_aktivitaet_art TEXT,
+            naechste_aktivitaet_status TEXT,
+            naechste_aktivitaet_datum TEXT,
+            naechste_aktivitaet_begruendung TEXT,
+            erstellt_am TEXT NOT NULL
+        )
+        """,
+        """
+        CREATE TABLE beleg_plaene_neu (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            lauf_id TEXT NOT NULL,
+            beleg_id TEXT,
+            vorgang_id TEXT,
+            version INTEGER NOT NULL,
+            plan_json TEXT NOT NULL,
+            revisionsgrund TEXT,
+            erstellt_am TEXT NOT NULL
+        )
+        """,
+        "INSERT INTO beleg_plaene_neu (id, lauf_id, beleg_id, version, plan_json, revisionsgrund, erstellt_am) "
+        "SELECT id, lauf_id, beleg_id, version, plan_json, revisionsgrund, erstellt_am FROM beleg_plaene",
+        "DROP TABLE beleg_plaene",
+        "ALTER TABLE beleg_plaene_neu RENAME TO beleg_plaene",
+    ):
+        conn.execute(anweisung)
+
+
+MIGRATIONEN = [
+    _migration_001_initial_schema,
+    _migration_002_provenienz_status_und_plan,
+    _migration_003_dokumentart_und_vorgaenge,
+]
 
 
 def _sicherungskopie_erstellen(conn: sqlite3.Connection, vor_version: int) -> None:
@@ -322,10 +376,10 @@ def beleg_speichern(
             ausgang, begruendung, radar_einschaetzung, radar_begruendung,
             speichername, storage_key, extraktionsmethode, fehlercode,
             dokumentstatus, reviewstatus, review_aufgabe, baseline_bestaetigt,
-            betrag_dezimal, erfasst_am
+            betrag_dezimal, dokumentart, vorgang_id, erfasst_am
         ) VALUES (
             ?, ?, ?, ?, '', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-            ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now')
+            ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now')
         )
         """,
         (
@@ -359,18 +413,25 @@ def beleg_speichern(
             beleg.review_aufgabe,
             1 if beleg.baseline_bestaetigt else 0,
             beleg.betrag_dezimal,
+            beleg.dokumentart,
+            beleg.vorgang_id,
         ),
     )
     conn.commit()
 
 
-def plan_speichern(conn: sqlite3.Connection, lauf_id: str, beleg_id: str, plan) -> None:
+def plan_speichern(
+    conn: sqlite3.Connection, lauf_id: str, beleg_id: str | None, plan, vorgang_id: str | None = None
+) -> None:
+    """beleg_id gehoert einem Beleg, vorgang_id einem Kostenvorgang. Ein
+    Container-Plan einer EML traegt NUR die vorgang_id; eine vorgang_id
+    landet nie im beleg_id-Feld."""
     conn.execute(
         """
-        INSERT INTO beleg_plaene (lauf_id, beleg_id, version, plan_json, revisionsgrund, erstellt_am)
-        VALUES (?, ?, ?, ?, ?, datetime('now'))
+        INSERT INTO beleg_plaene (lauf_id, beleg_id, vorgang_id, version, plan_json, revisionsgrund, erstellt_am)
+        VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
         """,
-        (lauf_id, beleg_id, plan.version, json.dumps(plan.to_dict(), ensure_ascii=False), plan.revisionsgrund),
+        (lauf_id, beleg_id, vorgang_id, plan.version, json.dumps(plan.to_dict(), ensure_ascii=False), plan.revisionsgrund),
     )
     conn.commit()
 
@@ -388,18 +449,20 @@ def plaene_fuer_beleg(conn: sqlite3.Connection, beleg_id: str) -> list[dict]:
 
 
 def agent_schritt_speichern(
-    conn: sqlite3.Connection, lauf_id: str, beleg_id: str | None, schritt: AgentSchritt
+    conn: sqlite3.Connection, lauf_id: str, beleg_id: str | None, schritt: AgentSchritt,
+    vorgang_id: str | None = None,
 ) -> None:
     conn.execute(
         """
         INSERT INTO agent_schritte (
-            lauf_id, beleg_id, schritt, status, werkzeug, begruendung,
+            lauf_id, beleg_id, vorgang_id, schritt, status, werkzeug, begruendung,
             evidenz, start, ende
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             lauf_id,
             beleg_id,
+            vorgang_id,
             schritt.schritt,
             schritt.status,
             schritt.werkzeug,
@@ -408,6 +471,52 @@ def agent_schritt_speichern(
             schritt.start,
             schritt.ende,
         ),
+    )
+    conn.commit()
+
+
+def vorgang_speichern(conn: sqlite3.Connection, vorgang) -> None:
+    conn.execute(
+        """
+        INSERT INTO vorgaenge (
+            id, lauf_id, quelle, eml_dateiname, eml_hash, eml_storage_key,
+            betreff, absender, mail_datum, naechste_aktivitaet_art,
+            naechste_aktivitaet_status, naechste_aktivitaet_datum,
+            naechste_aktivitaet_begruendung, erstellt_am
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+        """,
+        (
+            vorgang.id,
+            vorgang.lauf_id,
+            vorgang.quelle,
+            vorgang.eml_dateiname,
+            vorgang.eml_hash,
+            vorgang.eml_storage_key,
+            vorgang.betreff,
+            vorgang.absender,
+            vorgang.mail_datum,
+            vorgang.naechste_aktivitaet_art,
+            vorgang.naechste_aktivitaet_status,
+            vorgang.naechste_aktivitaet_datum,
+            vorgang.naechste_aktivitaet_begruendung,
+        ),
+    )
+    conn.commit()
+
+
+def vorgaenge_liste(conn: sqlite3.Connection) -> list[dict]:
+    rows = conn.execute("SELECT *, rowid AS _seq FROM vorgaenge ORDER BY rowid ASC").fetchall()
+    return [dict(r) for r in rows]
+
+
+def beleg_review_setzen(
+    conn: sqlite3.Connection, beleg_id: str, reviewstatus: str, review_aufgabe: str
+) -> None:
+    """Setzt eine offene Pruefaufgabe nachtraeglich, z.B. wenn erst auf
+    Vorgangsebene sichtbar wird, dass die Rechnung zum Zahlungsbeleg fehlt."""
+    conn.execute(
+        "UPDATE belege SET reviewstatus = ?, review_aufgabe = ? WHERE id = ?",
+        (reviewstatus, review_aufgabe, beleg_id),
     )
     conn.commit()
 

@@ -18,7 +18,10 @@ from belegwaechter.modelle import FELDNAMEN, ExtrahiertesFeld
 _MUSTER = {
     "referenz": re.compile(r"Rechnung\s+Nr\.?\s*[:.]?\s*(\S+)", re.IGNORECASE),
     "datum": re.compile(r"Datum\s*:\s*(\d{2}\.\d{2}\.\d{4})", re.IGNORECASE),
-    "zeitraum": re.compile(r"Leistungszeitraum\s*:\s*(\w+)", re.IGNORECASE),
+    "zeitraum": re.compile(
+        r"Leistungszeitraum\s*:\s*(\d{2}\.\d{2}\.\d{4}\s*-\s*\d{2}\.\d{2}\.\d{4}|\w+)",
+        re.IGNORECASE,
+    ),
     "tarif": re.compile(r"Tarif\s*:\s*(.+)", re.IGNORECASE),
     "betrag_waehrung": re.compile(r"Betrag\s*:\s*([\d.,]+)\s*([A-Z]{3})", re.IGNORECASE),
     "waehrung_explizit": re.compile(r"Waehrung\s*:\s*([A-Z]{3})", re.IGNORECASE),
@@ -35,44 +38,45 @@ def pdf_text_lesen(pdf_pfad: str) -> str:
     return "\n".join(teile)
 
 
-def felder_aus_pdf_text(text: str) -> dict[str, ExtrahiertesFeld]:
+def felder_aus_text(text: str, herkunft: str = "aus PDF-Text") -> dict[str, ExtrahiertesFeld]:
     """Strukturiert die erste Zeile als Anbieter und sucht die uebrigen
-    Felder per Muster. Kein Feld wird erfunden: fehlt ein Treffer, wird der
-    Wert None mit Herkunft 'fehlt' gesetzt."""
+    Felder per Muster. Arbeitet auf reinem Text, unabhaengig von der Quelle
+    (PDF-Textebene oder Mailtext). Kein Feld wird erfunden: fehlt ein
+    Treffer, wird der Wert None mit Herkunft 'fehlt' gesetzt."""
     zeilen = [z.strip() for z in text.splitlines() if z.strip()]
     ergebnis: dict[str, ExtrahiertesFeld] = {}
 
     anbieter = zeilen[0] if zeilen else None
     ergebnis["anbieter"] = ExtrahiertesFeld(
-        "anbieter", anbieter, "aus PDF-Text" if anbieter else "fehlt"
+        "anbieter", anbieter, herkunft if anbieter else "fehlt"
     )
 
     treffer_referenz = _MUSTER["referenz"].search(text)
     ergebnis["referenz"] = ExtrahiertesFeld(
         "referenz",
         treffer_referenz.group(1) if treffer_referenz else None,
-        "aus PDF-Text" if treffer_referenz else "fehlt",
+        herkunft if treffer_referenz else "fehlt",
     )
 
     treffer_datum = _MUSTER["datum"].search(text)
     ergebnis["datum"] = ExtrahiertesFeld(
         "datum",
         treffer_datum.group(1) if treffer_datum else None,
-        "aus PDF-Text" if treffer_datum else "fehlt",
+        herkunft if treffer_datum else "fehlt",
     )
 
     treffer_zeitraum = _MUSTER["zeitraum"].search(text)
     ergebnis["zeitraum"] = ExtrahiertesFeld(
         "zeitraum",
-        treffer_zeitraum.group(1).lower() if treffer_zeitraum else None,
-        "aus PDF-Text" if treffer_zeitraum else "fehlt",
+        " ".join(treffer_zeitraum.group(1).lower().split()) if treffer_zeitraum else None,
+        herkunft if treffer_zeitraum else "fehlt",
     )
 
     treffer_tarif = _MUSTER["tarif"].search(text)
     ergebnis["tarif"] = ExtrahiertesFeld(
         "tarif",
         treffer_tarif.group(1).strip() if treffer_tarif else None,
-        "aus PDF-Text" if treffer_tarif else "fehlt",
+        herkunft if treffer_tarif else "fehlt",
     )
 
     treffer_betrag = _MUSTER["betrag_waehrung"].search(text)
@@ -87,15 +91,19 @@ def felder_aus_pdf_text(text: str) -> dict[str, ExtrahiertesFeld]:
             waehrung_wert = treffer_waehrung_explizit.group(1).upper()
 
     ergebnis["betrag"] = ExtrahiertesFeld(
-        "betrag", betrag_wert, "aus PDF-Text" if betrag_wert else "fehlt"
+        "betrag", betrag_wert, herkunft if betrag_wert else "fehlt"
     )
     ergebnis["waehrung"] = ExtrahiertesFeld(
-        "waehrung", waehrung_wert, "aus PDF-Text" if waehrung_wert else "fehlt"
+        "waehrung", waehrung_wert, herkunft if waehrung_wert else "fehlt"
     )
 
     for name in FELDNAMEN:
         ergebnis.setdefault(name, ExtrahiertesFeld(name, None, "fehlt"))
     return ergebnis
+
+
+def felder_aus_pdf_text(text: str) -> dict[str, ExtrahiertesFeld]:
+    return felder_aus_text(text, herkunft="aus PDF-Text")
 
 
 def leere_felder(herkunft: str = "fehlt") -> dict[str, ExtrahiertesFeld]:

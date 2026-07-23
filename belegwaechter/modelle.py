@@ -25,6 +25,22 @@ RADAR_VERAENDERT_EINDEUTIG = "veraendert_eindeutig"
 RADAR_VERGLEICH_ERFORDERLICH = "vergleich_erforderlich"
 RADAR_BELEG_FEHLT = "beleg_fehlt"
 
+# Dokumentart: regelbasierte, fail-closed bestimmte Einordnung des Dokuments.
+DOKUMENTART_RECHNUNG = "rechnung"
+DOKUMENTART_ZAHLUNGSBELEG = "zahlungsbeleg"
+DOKUMENTART_ABO_BESTAETIGUNG = "abo_bestaetigung"
+DOKUMENTART_SONSTIGER_KOSTENNACHWEIS = "sonstiger_kostennachweis"
+DOKUMENTART_UNBESTIMMT = "unbestimmt"
+
+# Naechste Aktivitaet eines Kostenvorgangs: Art und Status sind strukturell
+# getrennt, damit "naechste Zahlung" nie mit "naechster Beleg erwartet"
+# verwechselt wird. Ein Status wird nur mit expliziter Evidenz gesetzt.
+AKTIVITAET_ART_ZAHLUNG = "zahlung"
+AKTIVITAET_ART_BELEG = "beleg"
+AKTIVITAET_BESTAETIGT = "bestaetigt"
+AKTIVITAET_ERWARTET = "erwartet"
+AKTIVITAET_UNBEKANNT = "unbekannt"
+
 # Dokumentstatus: orthogonal zu `ausgang`, beschreibt den Paketzustand ohne
 # den (moeglicherweise offenen) Abovergleich mitzumeinen.
 DOKUMENTSTATUS_VORBEREITET = "vorbereitet"
@@ -85,6 +101,8 @@ class Beleg:
     baseline_bestaetigt: bool = False
     betrag_dezimal: str | None = None
     radar_hinweis: str | None = None
+    dokumentart: str | None = None
+    vorgang_id: str | None = None
     erfasst_am: str = ""
     schritte: list[AgentSchritt] = field(default_factory=list)
     plaene: list = field(default_factory=list)
@@ -92,6 +110,28 @@ class Beleg:
     def feldwert(self, name: str) -> str | None:
         f = self.felder.get(name)
         return f.wert if f else None
+
+
+@dataclass
+class Vorgang:
+    """Ein Kostenvorgang buendelt mehrere Dokumente derselben Quelle (in
+    diesem Slice: eine hochgeladene EML). Der EML-Container ist bewusst KEIN
+    Beleg; seine Provenienz (Hash, Storage-Key, Mail-Kopfzeilen als rohe
+    Anzeigetexte) lebt hier."""
+
+    id: str
+    lauf_id: str
+    quelle: str  # "eml"
+    eml_dateiname: str
+    eml_hash: str
+    eml_storage_key: str | None
+    betreff: str
+    absender: str
+    mail_datum: str
+    naechste_aktivitaet_art: str | None = None  # "zahlung" | "beleg" | None
+    naechste_aktivitaet_status: str = AKTIVITAET_UNBEKANNT
+    naechste_aktivitaet_datum: str | None = None
+    naechste_aktivitaet_begruendung: str = ""
 
 
 @dataclass

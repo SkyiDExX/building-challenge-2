@@ -11,6 +11,7 @@ import re
 
 FEHLERCODE_PDF_UNLESBAR = "PDF_UNLESBAR"
 FEHLERCODE_PDF_OHNE_TEXT = "PDF_OHNE_TEXT"
+FEHLERCODE_MAILTEXT_LEER = "MAILTEXT_LEER"
 FEHLERCODE_DATEI_ZU_GROSS = "DATEI_ZU_GROSS"
 FEHLERCODE_PFAD_UNSICHER = "PFAD_UNSICHER"
 FEHLERCODE_PFAD_NICHT_AUFLOESBAR = "PFAD_NICHT_AUFLOESBAR"
@@ -21,6 +22,7 @@ FEHLERCODE_UNBEKANNTER_FEHLER = "UNBEKANNTER_FEHLER"
 _NUTZERMELDUNGEN = {
     FEHLERCODE_PDF_UNLESBAR: "Diese PDF konnte nicht gelesen werden. Bitte das Original erneut ablegen.",
     FEHLERCODE_PDF_OHNE_TEXT: "In dieser PDF ist keine Textebene vorhanden.",
+    FEHLERCODE_MAILTEXT_LEER: "Im Mailtext wurde kein lesbarer Inhalt gefunden.",
     FEHLERCODE_DATEI_ZU_GROSS: "Die Datei ueberschreitet die zulaessige Groesse.",
     FEHLERCODE_PFAD_UNSICHER: "Der Dateiname wurde abgelehnt.",
     FEHLERCODE_PFAD_NICHT_AUFLOESBAR: "Die Quelldatei ist nicht mehr auffindbar. Bitte das Original erneut ablegen.",

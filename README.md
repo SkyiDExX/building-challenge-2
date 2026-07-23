@@ -16,8 +16,8 @@ Nerven.
 
 Belege in einen Eingangsordner legen, fertig. Der Agent liest jeden Beleg,
 prüft ihn auf Vollständigkeit, gleicht ihn mit dem Bestand ab (Dublette?
-bekanntes Abo? Preis gestiegen?) und entscheidet mit Begründung: automatisch
-verbuchen oder zur Prüfung vorlegen. Heraus kommt ein geprüftes,
+bekanntes Abo? Preis gestiegen?) und entscheidet mit Begründung: in das
+vorbereitete Belegpaket übernehmen oder zur Prüfung vorlegen. Heraus kommt ein geprüftes,
 nachvollziehbares und buchhaltungsvorbereitendes Belegpaket, dazu ein
 Abo-Radar, das wiederkehrende Kosten und Preiserhöhungen sichtbar macht.
 

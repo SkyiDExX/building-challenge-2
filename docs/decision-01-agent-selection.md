@@ -37,7 +37,7 @@ Status: Entschieden, wartet auf Abnahme durch Enrico vor Implementierungsstart
 | Persistenz | `service/datenbank.py` (MIGRATIONEN ab Z.132) | SQLite, WAL, nummerierte append-only Migrationen, `schema_version`, CHECK-Enums | Gleiche Migrationstechnik neu schreiben | Architekturwissen | - |
 | Auditlog | `service/datenbank.py` Z.178, Z.550 | Tabelle `audit_ereignisse` mit alt/neu-Zustand, Aktion, Quelle je Schreibvorgang | Kern der Nachvollziehbarkeit des Belegpakets | Sicherheitsmuster | - |
 | Provenienz | `service/datenbank.py` Migration 009 (`beleg_*`-Spalten) | Trennung Import-Herkunft vs. Analyse-Herkunft, Ergebnisse verweisen auf Beleg | Direkt übertragbar: jedes Extrakt verweist auf Original-Datei plus Extraktionslauf | Sicherheitsmuster | - |
-| Fail-closed Validierung | `service/validierung.py` | Whitelist Feld zu Prüffunktion, unbekannte Felder sind Fehler, wertfreie Fehlermeldungen | Unvollständige Belege landen im Review statt still verbucht | Sicherheitsmuster | - |
+| Fail-closed Validierung | `service/validierung.py` | Whitelist Feld zu Prüffunktion, unbekannte Felder sind Fehler, wertfreie Fehlermeldungen | Unvollständige Belege landen im Review statt still übernommen | Sicherheitsmuster | - |
 | Review-Bucket | `service/datenbank.py` (`migration_review`) | Unklare Fälle werden gesammelt statt verworfen | Muster für "Beleg unklar, Mensch entscheidet" | Sicherheitsmuster | - |
 | Mail-Wache | `service/mail_wache.py` | IMAP-IDLE Daemon, debounced Subprozess-Sync, Backoff, Status in DB | Später: Postfach-Überwachung für echte Belege; nicht im MVP | Architekturwissen | Nur Code gelesen, nie ausgeführt |
 | Test-Isolation | `tests/test_datenservice.py` Z.40-51 | Temp-DB via `mkdtemp`, Server auf Port 0, synthetische Fixtures, Produktions-DB nie geöffnet | Von Tag 1 übernehmen: Test- und Demo-Daten strikt getrennt | Testmuster | - |
@@ -69,7 +69,7 @@ Gewichte: Problem/Zeitersparnis 30, Demo 20, Agentik 15, Stabilität bis Sonntag
 - **Konkretes Problem:** Belege kommen verstreut an (Mail, PDF, Screenshot), landen unsortiert in Ordnern; Abos und Preiserhöhungen bleiben unbemerkt; vor Steuerterminen fehlt Überblick und Nerven.
 - **Heutiger manueller Ablauf:** Beleg suchen, öffnen, Betrag/Datum/Anbieter abtippen, in Ordner ablegen, Abos aus dem Kopf erinnern; oft passiert nichts davon.
 - **Plausible Zeitersparnis:** Schätzung 1 bis 2 Stunden pro Monat plus vermiedene Fehlkosten durch unbemerkte Abo-Erhöhungen (nicht gemessen).
-- **Autonome Schritte:** 1) Beleg aus Eingangsordner einlesen und Felder extrahieren (Anbieter, Datum, Betrag, Währung, Referenz), 2) fail-closed gegen Vollständigkeits-Checkliste prüfen, 3) gegen Bestand abgleichen (Dublette? bekanntes Abo? Preis verändert?), 4) Entscheidung mit Begründung: automatisch ins Belegpaket oder Review-Bucket, 5) Abo-Radar, Monatsübersicht und Auditlog aktualisieren.
+- **Autonome Schritte:** 1) Beleg aus Eingangsordner einlesen und Felder extrahieren (Anbieter, Datum, Betrag, Währung, Referenz), 2) fail-closed gegen Vollständigkeits-Checkliste prüfen, 3) gegen Bestand abgleichen (Dublette? bekanntes Abo? Preis verändert?), 4) Entscheidung mit Begründung: in das vorbereitete Belegpaket übernehmen oder Review-Bucket, 5) Abo-Radar, Monatsübersicht und Auditlog aktualisieren.
 - **Direkt nutzbarer Output:** Geprüftes Belegpaket (strukturierte Daten mit Verweis auf Original), Monatsübersicht, Abo-Radar, CSV-Export als Buchhaltungs-Vorbereitung.
 - **Demo-Moment:** Drei Dateien in den Eingangsordner ziehen; Sekunden später steht das geprüfte Belegpaket da, das Abo-Radar meldet eine Preiserhöhung, eine Dublette wurde aussortiert, mit Begründung.
 - **Notwendige Integrationen:** Keine im MVP (lokaler Ordner, lokale DB). Später optional Postfach.
@@ -205,10 +205,10 @@ Sprachregel für alle Projekttexte: Es gilt ausschließlich das Versprechen "gep
 - **Synthetischer Input:** Ordner `fixtures/eingang/` mit erfundenen Belegen (Textform, später auch Screenshot-Fälle): z.B. "CloudHost Nov", "CloudHost Dez mit Preiserhöhung", "Design-Tool-Jahresrechnung", "Dublette CloudHost Dez", "Beleg ohne Betrag". Keine echten Daten, keine echten Anbieterbeziehungen.
 - **Autonome Schritte (mindestens drei):** Extrahieren, fail-closed prüfen, Bestandsabgleich, begründete Entscheidung, Radar/Übersicht/Audit aktualisieren.
 - **Direkt nutzbarer Output:** Belegpaket-Übersicht (pro Beleg: Felder, Status, Begründung, Verweis auf Originaldatei), Abo-Radar, CSV-Export.
-- **Sichtbare Provenienz:** Jeder verbuchte Eintrag verweist auf Originaldatei plus Extraktionslauf (Muster aus Optifyx-Provenienz, neu implementiert).
+- **Sichtbare Provenienz:** Jeder übernommene Eintrag verweist auf Originaldatei plus Extraktionslauf (Muster aus Optifyx-Provenienz, neu implementiert).
 - **Aktivitätsverlauf:** Auditlog mit alt/neu-Zustand je Aktion (Muster aus Optifyx-Auditlog, neu implementiert).
 - **Unsicherheits- und Review-Behandlung:** Unvollständige oder widersprüchliche Belege landen fail-closed im Review-Bucket mit Begründung; nichts wird geraten oder still verworfen.
-- **Normalfall:** Vollständiger Beleg wird automatisch verbucht und erscheint in Übersicht und Radar.
+- **Normalfall:** Vollständiger Beleg wird nach interner Checkliste geprüft, in das vorbereitete Belegpaket übernommen und erscheint in Übersicht und Radar.
 - **Intelligenter Ausnahmefall:** Preiserhöhung eines bekannten Abos wird erkannt und alarmiert; unvollständiger Beleg geht in Review.
 - **Academy-Demo-Modus:** Ein Befehl startet mit frischen Fixtures und leerer Demo-DB; komplett offline vorführbar.
 - **Spätere produktive Integration:** Echter Belegordner, optional Postfach-Anbindung (Mail-Wache-Muster), Export in den Finance-Bereich von Optifyx OS.
@@ -222,7 +222,7 @@ Sprachregel für alle Projekttexte: Es gilt ausschließlich das Versprechen "gep
 1. **0:00 bis 0:15:** Bildschirm zeigt links den chaotischen Eingangsordner, rechts die leere Belegwächter-Ansicht. Eingeblendeter Satz: Problem (Belege verstreut, Abos unbemerkt) plus Versprechen plus ein Blick auf das fertige Endergebnis.
 2. **0:15 bis 0:60:** Kernautomation: Belege in den Eingangsordner ziehen, Agent starten, Übersicht füllt sich sichtbar; erster Erfolg klar erkennbar.
 3. **1:00 bis 1:40:** Ausnahmefälle: Abo-Radar schlägt bei Preiserhöhung an (alt/neu sichtbar), Dublette wird aussortiert, unvollständiger Beleg liegt im Review, jeweils mit Begründungstext.
-4. **1:40 bis 2:20:** Nachvollziehbarkeit: Klick von einem verbuchten Eintrag zur Originaldatei (Provenienz), Blick ins Auditlog, CSV-Export öffnen.
+4. **1:40 bis 2:20:** Nachvollziehbarkeit: Klick von einem übernommenen Eintrag zur Originaldatei (Provenienz), Blick ins Auditlog, CSV-Export öffnen.
 5. **2:20 bis 2:45:** Reset-Befehl, System startet frisch, beweist Reproduzierbarkeit.
 
 ## 10. Datenschutzgrenzen
@@ -247,7 +247,7 @@ Demo und Tests verwenden ausschließlich erfundene Belege. Keine echten Rechnung
 - **Erwarteter Output:** Übersicht (zunächst als lokale Ansicht oder strukturierter Report), `export.csv`, Auditlog-Einträge.
 - **Isolierte Persistenz:** `speicher/belegwaechter.db` (SQLite, per .gitignore ausgeschlossen), Migrationsmuster mit `schema_version`.
 - **Vorgeschlagener Dateikreis:** `belegwaechter/` (Verarbeitungskern), `fixtures/eingang/`, `tests/test_slice.py`, Ergänzungen in README und `.gitignore`.
-- **Akzeptanzkriterien:** Alle fünf Fixtures landen im jeweils richtigen Zustand (3 verbucht, 1 Dublette aussortiert, 1 Review); Preisalarm mit alt/neu-Werten vorhanden; jeder Eintrag verweist auf seine Quelldatei; Auditlog vollständig; Reset stellt den Ausgangszustand wieder her; Testlauf grün.
+- **Akzeptanzkriterien:** Alle fünf Fixtures landen im jeweils richtigen Zustand (3 übernommen, 1 Dublette aussortiert, 1 Review); Preisalarm mit alt/neu-Werten vorhanden; jeder Eintrag verweist auf seine Quelldatei; Auditlog vollständig; Reset stellt den Ausgangszustand wieder her; Testlauf grün.
 - **Tests:** Ein Testmodul mit Temp-DB (mkdtemp-Muster), das den kompletten Durchlauf plus Reset prüft.
 - **Stop-Bedingungen:** Kein stabiler Durchlauf bis Freitagabend (Kill-Kriterium); jede Notwendigkeit echter Daten; jede Ausweitung über den Dateikreis hinaus.
 - **Demo-Auswirkung:** Dieser Slice deckt Drehbuch-Szenen 2, 3 und 5 vollständig ab.

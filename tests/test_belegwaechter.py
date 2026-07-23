@@ -767,6 +767,44 @@ class HttpTestCase(unittest.TestCase):
         return self._upload(dateien)
 
 
+class AssetRouteTest(HttpTestCase):
+    """Statische Auslieferung des lokalen Hintergrundfotos unter
+    /assets/*: nur bekannte Bilddateien, kein Pfad-Traversal."""
+
+    def test_hintergrundfotos_werden_ausgeliefert(self):
+        for name, content_type in (
+            ("hintergrund-1600.jpg", "image/jpeg"),
+            ("hintergrund-2560.jpg", "image/jpeg"),
+        ):
+            status, daten = self._senden("GET", f"/assets/{name}", host=f"127.0.0.1:{self.port}")
+            self.assertEqual(status, 200, name)
+            self.assertGreater(len(daten), 1000, f"{name} sollte kein leerer Platzhalter sein")
+
+        conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=10)
+        conn.request("GET", "/assets/hintergrund-1600.jpg", headers={"Content-Length": "0"})
+        resp = conn.getresponse()
+        resp.read()
+        self.assertEqual(resp.getheader("Content-Type"), "image/jpeg")
+        conn.close()
+
+    def test_traversal_ausserhalb_von_assets_wird_abgelehnt(self):
+        for pfad in (
+            "/assets/../server.py",
+            "/assets/..%2Fserver.py",
+            "/assets/unterordner/datei.jpg",
+        ):
+            status, _ = self._senden("GET", pfad, host=f"127.0.0.1:{self.port}")
+            self.assertEqual(status, 404, pfad)
+
+    def test_unbekannte_dateiendung_wird_abgelehnt(self):
+        status, _ = self._senden("GET", "/assets/hintergrund-1600.exe", host=f"127.0.0.1:{self.port}")
+        self.assertEqual(status, 404)
+
+    def test_nicht_vorhandene_datei_liefert_404(self):
+        status, _ = self._senden("GET", "/assets/gibt-es-nicht.jpg", host=f"127.0.0.1:{self.port}")
+        self.assertEqual(status, 404)
+
+
 class HttpSicherheitTest(HttpTestCase):
     def test_gueltiger_upload_mit_ip_host(self):
         status, daten = self._upload([("domainly_juli.pdf", _lesen("domainly_juli.pdf"))])

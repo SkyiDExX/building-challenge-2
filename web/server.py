@@ -15,6 +15,7 @@ from __future__ import annotations
 import csv
 import io
 import json
+import re
 import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -28,6 +29,17 @@ from belegwaechter.fehlertexte import bereinigen  # noqa: E402
 HOST = "127.0.0.1"
 PORT = 8850
 STATIC_DIR = Path(__file__).resolve().parent / "static"
+ASSETS_DIR = STATIC_DIR / "assets"
+
+# Nur einfache, flache Dateinamen ohne Pfadtrennzeichen -- kein Traversal
+# moeglich, unabhaengig von der zusaetzlichen Basis-Pruefung in _asset_datei.
+_ASSET_PFAD_MUSTER = re.compile(r"^/assets/[A-Za-z0-9._-]+$")
+_ASSET_CONTENT_TYPES = {
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".png": "image/png",
+    ".webp": "image/webp",
+}
 
 MAX_ANFRAGE_BYTES = 20 * 1024 * 1024  # gesamte HTTP-Anfrage
 MAX_DATEI_BYTES = 10 * 1024 * 1024  # einzelne Datei
@@ -198,6 +210,26 @@ class BelegwaechterHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _asset_datei(self) -> None:
+        """Liefert eine statische Datei aus web/static/assets/ (z.B. das
+        Hintergrundfoto). Nur einfache Dateinamen ohne Pfadtrennzeichen
+        (siehe _ASSET_PFAD_MUSTER) und nur bekannte Bildendungen; der
+        aufgeloeste Pfad muss zusaetzlich nachweislich unterhalb von
+        ASSETS_DIR liegen, bevor irgendetwas gelesen wird."""
+        if not _ASSET_PFAD_MUSTER.match(self.path):
+            self._json(404, {"fehler": "nicht gefunden"})
+            return
+        dateiname = self.path.removeprefix("/assets/")
+        content_type = _ASSET_CONTENT_TYPES.get(Path(dateiname).suffix.lower())
+        if content_type is None:
+            self._json(404, {"fehler": "nicht gefunden"})
+            return
+        kandidat = (ASSETS_DIR / dateiname).resolve()
+        if not kandidat.is_relative_to(ASSETS_DIR.resolve()):
+            self._json(404, {"fehler": "nicht gefunden"})
+            return
+        self._datei(kandidat, content_type)
+
     def do_GET(self) -> None:  # noqa: N802
         if self.path == "/" or self.path == "/index.html":
             self._datei(STATIC_DIR / "index.html", "text/html; charset=utf-8")
@@ -205,6 +237,8 @@ class BelegwaechterHandler(BaseHTTPRequestHandler):
             self._datei(STATIC_DIR / "styles.css", "text/css; charset=utf-8")
         elif self.path == "/app.js":
             self._datei(STATIC_DIR / "app.js", "application/javascript; charset=utf-8")
+        elif self.path.startswith("/assets/"):
+            self._asset_datei()
         elif self.path == "/api/ergebnis":
             erlaubt, code, fehler = _zugriff_erlaubt(self, veraendernd=False)
             if not erlaubt:

@@ -1,8 +1,8 @@
 /* Belegwächter — Liquid-Glass-Oberfläche.
    Bewusst EIN dunkles, atmosphärisches Design (Nachtblau/Graphit mit warmem
    Akzentglühen) statt Hell/Dunkel-Umschaltung: alle Kontraste sind auf diese
-   eine Fläche abgestimmt. Keine externen Ressourcen, keine Bilder, nur
-   CSS-Verläufe. Systemschriften. */
+   eine Fläche abgestimmt. Hintergrundfoto liegt lokal unter web/static/assets/
+   (keine externen Ressourcen, kein CDN). Systemschriften. */
 
 :root {
   /* Atmosphäre */
@@ -10,8 +10,21 @@
   --nacht-2: #0b111c;
   --nacht-3: #101724;
 
-  /* Glasflächen (drei Tiefenebenen) */
-  --glas-zone: linear-gradient(160deg, rgba(255, 255, 255, 0.075), rgba(255, 255, 255, 0.028));
+  /* Responsive Hintergrundfoto: Standardgroesse fuer kleinere/mittlere
+     Fenster, ab 1400px eine schaerfere, groessere Variante (siehe
+     @media-Regel unten). Eine CSS-Variable statt doppelter
+     background-image-Liste, damit die Verlaufsebenen nicht dupliziert
+     werden muessen. */
+  --hintergrundfoto: url("assets/hintergrund-1600.jpg");
+
+  /* Glasflächen (drei Tiefenebenen). --glas-zone kombiniert die diagonale
+     Lichtsheen mit einer gleichmaessigen dunklen Grundtoenung, damit die
+     Hauptkacheln unabhaengig von der jeweils durchscheinenden Fotostelle
+     zuverlaessig lesbar bleiben (Text/Badges duerfen nie vom Hintergrundfoto
+     beeintraechtigt werden). */
+  --glas-zone:
+    linear-gradient(160deg, rgba(255, 255, 255, 0.075), rgba(255, 255, 255, 0.028)),
+    linear-gradient(rgba(8, 13, 21, 0.4), rgba(8, 13, 21, 0.4));
   --glas-karte: rgba(255, 255, 255, 0.045);
   --glas-modal: rgba(21, 30, 46, 0.78);
   --glas-fallback-zone: rgba(26, 35, 51, 0.94);
@@ -43,6 +56,10 @@
   --schatten-modal: 0 24px 70px rgba(2, 5, 12, 0.65);
 }
 
+@media (min-width: 1400px) {
+  :root { --hintergrundfoto: url("assets/hintergrund-2560.jpg"); }
+}
+
 * { box-sizing: border-box; }
 
 body {
@@ -52,13 +69,30 @@ body {
   line-height: 1.5;
   min-height: 100vh;
   background-color: var(--nacht-2);
-  /* Atmosphärischer Hintergrund: kühles Nachtblau oben, warmes Glühen am
-     unteren Rand, dezente violette Tiefe. Rein lokal, keine Bilder. */
+  /* Atmosphaerisches Hintergrundfoto (Berg/Kueste bei Sonnenuntergang,
+     rein lokal unter assets/), darueber eine kraeftige Verlaufs-Vignette
+     in der bestehenden Nachtblau/Warm-Palette: dunkel an Kopf- und
+     Fusszeile fuer Kontrast, im mittleren Drittel durchlaessiger, damit
+     das Motiv erkennbar bleibt, ohne Karten/Badges/Text zu stoeren. Die
+     Eckglut-Verlaeufe bleiben erhalten und greifen die Farbstimmung des
+     Fotos auf. */
   background-image:
-    radial-gradient(900px 620px at 85% -12%, rgba(88, 134, 212, 0.20), transparent 62%),
+    linear-gradient(
+      180deg,
+      rgba(6, 10, 17, 0.88) 0%,
+      rgba(8, 13, 21, 0.60) 16%,
+      rgba(10, 15, 24, 0.40) 38%,
+      rgba(9, 14, 23, 0.48) 60%,
+      rgba(7, 11, 18, 0.72) 84%,
+      rgba(5, 8, 13, 0.93) 100%
+    ),
+    radial-gradient(900px 620px at 85% -12%, rgba(88, 134, 212, 0.16), transparent 62%),
     radial-gradient(1100px 720px at -12% 112%, var(--warm), transparent 56%),
-    radial-gradient(720px 520px at 55% 122%, rgba(122, 96, 200, 0.10), transparent 62%),
-    linear-gradient(180deg, var(--nacht-1) 0%, var(--nacht-2) 45%, var(--nacht-3) 100%);
+    radial-gradient(720px 520px at 55% 122%, rgba(122, 96, 200, 0.08), transparent 62%),
+    var(--hintergrundfoto);
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
   background-attachment: fixed;
 }
 

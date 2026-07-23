@@ -1353,6 +1353,39 @@ class EmlDeterminismusTest(IsolierteDatenbankTestCase):
         self.assertEqual(erster, zweiter)
 
 
+class ResetRaceTest(IsolierteDatenbankTestCase):
+    """Regressionsschutz: Nach einem Reset ruft die Oberflaeche drei
+    API-Endpunkte parallel auf; alle Threads muessen die geloeschte
+    Datenbank gleichzeitig neu anlegen koennen, ohne dass ein Thread eine
+    halb angelegte Datei ohne schema_version-Tabelle erwischt."""
+
+    def test_parallele_erstanlage_nach_reset(self):
+        self.conn.close()
+        speicher.reset()
+
+        fehler = []
+        start = threading.Barrier(8)
+
+        def oeffnen() -> None:
+            try:
+                start.wait(timeout=10)
+                conn = speicher.verbindung()
+                version = conn.execute("SELECT version FROM schema_version").fetchone()[0]
+                if version != len(speicher.MIGRATIONEN):
+                    fehler.append(f"Unerwartete Schema-Version {version}")
+                conn.close()
+            except Exception as exc:  # noqa: BLE001
+                fehler.append(repr(exc))
+
+        threads = [threading.Thread(target=oeffnen) for _ in range(8)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=15)
+        self.conn = speicher.verbindung()
+        self.assertEqual(fehler, [], "Parallele Erstanlage nach Reset darf nie scheitern")
+
+
 class ModalSichtbarkeitTest(unittest.TestCase):
     """Regressionsschutz gegen den Demo-Blocker 'Overlay immer sichtbar':
     Autoren-CSS (display:flex auf .detail-overlay) ueberstimmt die

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import threading
 import uuid
 from pathlib import Path
 
@@ -297,23 +298,33 @@ def _ausstehende_migrationen_anwenden(conn: sqlite3.Connection) -> None:
         conn.isolation_level = vorheriger_isolation
 
 
+# Serialisiert Erstanlage und Migration der Datenbank. Ohne den Lock koennen
+# nach einem Reset mehrere parallele Server-Threads (die Oberflaeche laedt
+# /api/ergebnis, /api/radar und /api/audit gleichzeitig) dieselbe leere
+# DB-Datei anlegen: der erste Thread hat die Datei schon erzeugt, aber die
+# Tabellen noch nicht, und der zweite scheitert mit
+# "no such table: schema_version".
+_INIT_LOCK = threading.Lock()
+
+
 def verbindung() -> sqlite3.Connection:
     RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
     EINGANG_DIR.mkdir(parents=True, exist_ok=True)
-    neu = not DB_PFAD.exists()
-    conn = sqlite3.connect(DB_PFAD)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
-    if neu:
-        conn.execute("CREATE TABLE schema_version (version INTEGER NOT NULL)")
-        MIGRATIONEN[0](conn)
-        conn.execute("INSERT INTO schema_version (version) VALUES (1)")
-        conn.commit()
-    try:
-        _ausstehende_migrationen_anwenden(conn)
-    except Exception:
-        conn.close()
-        raise
+    with _INIT_LOCK:
+        conn = sqlite3.connect(DB_PFAD)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys = ON")
+        try:
+            # Idempotente Erstanlage statt "Datei existiert"-Heuristik.
+            conn.execute("CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL)")
+            if conn.execute("SELECT version FROM schema_version").fetchone() is None:
+                MIGRATIONEN[0](conn)
+                conn.execute("INSERT INTO schema_version (version) VALUES (1)")
+                conn.commit()
+            _ausstehende_migrationen_anwenden(conn)
+        except Exception:
+            conn.close()
+            raise
     return conn
 
 

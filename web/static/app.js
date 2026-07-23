@@ -31,7 +31,26 @@ const REVIEWSTATUS_LABEL = {
   offen: ["Prüfung offen", "badge-review"],
 };
 
+const DOKUMENTART_LABEL = {
+  rechnung: "Rechnung",
+  zahlungsbeleg: "Zahlungsbeleg",
+  abo_bestaetigung: "Abo-Bestätigung",
+  sonstiger_kostennachweis: "Kostennachweis",
+};
+
 let letzteBelege = [];
+let letzteVorgaenge = [];
+
+function aktivitaetBadge(v) {
+  if (v.naechste_aktivitaet_status === "bestaetigt" && v.naechste_aktivitaet_art === "zahlung") {
+    return badge(`Nächste Zahlung: ${v.naechste_aktivitaet_datum} (bestätigt)`, "badge-fertig");
+  }
+  if (v.naechste_aktivitaet_status === "erwartet" && v.naechste_aktivitaet_art === "beleg") {
+    const bis = v.naechste_aktivitaet_datum ? ` bis ${v.naechste_aktivitaet_datum}` : "";
+    return badge(`Nächster Beleg erwartet${bis}`, "badge-quelle");
+  }
+  return badge("Nächste Aktivität unbekannt", "badge-quelle");
+}
 
 function badge(text, klasse) {
   const span = document.createElement("span");
@@ -59,6 +78,7 @@ async function ladeAlles() {
     fetch("/api/audit").then((r) => r.json()),
   ]);
   letzteBelege = ergebnis.belege;
+  letzteVorgaenge = ergebnis.vorgaenge || [];
   renderBelege(letzteBelege);
   renderRadar(radar.radar);
   renderAudit(audit.audit);
@@ -79,10 +99,41 @@ function renderBelege(belege) {
     $("zaehler").textContent = `${belege.length} Belege verarbeitet: ${teile.join(", ")}.`;
   }
 
+  const vorgangJeId = {};
+  letzteVorgaenge.forEach((v) => { vorgangJeId[v.id] = v; });
+  const gezeigteVorgaenge = new Set();
+
   belege.forEach((b) => {
+    // Gruppenkopf: alle Dokumente eines E-Mail-Vorgangs stehen zusammen,
+    // mit Betreff, Absender und der naechsten Aktivitaet (nur mit Evidenz).
+    if (b.vorgang_id && vorgangJeId[b.vorgang_id] && !gezeigteVorgaenge.has(b.vorgang_id)) {
+      gezeigteVorgaenge.add(b.vorgang_id);
+      const v = vorgangJeId[b.vorgang_id];
+      const kopf = document.createElement("li");
+      kopf.className = "vorgang-kopf";
+      const zeile = document.createElement("div");
+      zeile.className = "vorgang-zeile";
+      const titel = document.createElement("span");
+      titel.className = "vorgang-titel";
+      titel.textContent = `E-Mail-Vorgang: ${v.betreff || v.eml_dateiname}`;
+      const absender = document.createElement("span");
+      absender.className = "vorgang-absender";
+      absender.textContent = v.absender || "";
+      zeile.append(titel, absender, aktivitaetBadge(v));
+      kopf.appendChild(zeile);
+      if (v.naechste_aktivitaet_begruendung) {
+        const beg = document.createElement("div");
+        beg.className = "vorgang-begruendung";
+        beg.textContent = v.naechste_aktivitaet_begruendung;
+        kopf.appendChild(beg);
+      }
+      liste.appendChild(kopf);
+    }
+
     const li = document.createElement("li");
+    if (b.vorgang_id) li.classList.add("vorgang-mitglied");
     if (b.ausgang === "review" || b.ausgang === "original_anfordern" || b.ausgang === "fehlgeschlagen") {
-      li.className = "review-zuerst";
+      li.classList.add("review-zuerst");
     }
     const btn = document.createElement("button");
     btn.type = "button";
@@ -101,6 +152,9 @@ function renderBelege(belege) {
     const datumTeil = b.felder.datum.wert ? `${b.felder.datum.wert} · ` : "";
     meta.textContent = `${betragTeil}${datumTeil}${b.dateiname}`;
     z1.append(name, meta, badge(label, klasse));
+    if (b.dokumentart && DOKUMENTART_LABEL[b.dokumentart]) {
+      z1.appendChild(badge(DOKUMENTART_LABEL[b.dokumentart], "badge-quelle"));
+    }
     z1.appendChild(badge(QUELLE_LABEL[b.quellenstatus] || b.quellenstatus, "badge-quelle"));
     if (b.reviewstatus === "offen" && REVIEWSTATUS_LABEL[b.reviewstatus]) {
       const [reviewLabel, reviewKlasse] = REVIEWSTATUS_LABEL[b.reviewstatus];

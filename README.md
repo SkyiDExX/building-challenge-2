@@ -1,11 +1,13 @@
 # Belegwächter — SKAILE Building Challenge #2
 
-> Stand Arbeitsblock 3 (23.07.2026): Erster echter End-to-End-Vertical-Slice
-> läuft. Zentrale, manuelle Kosten-Inbox: Belege werden manuell zugeführt.
-> Der Belegwächter ist ein regelbasierter, zustandsabhängiger Agent. Er
+> Stand Arbeitsblock 4 (23.07.2026): End-to-End-Vertical-Slice läuft,
+> jetzt inklusive EML-Upload. Zentrale, manuelle Kosten-Inbox: Belege und
+> heruntergeladene Rechnungs-E-Mails werden manuell zugeführt. Der
+> Belegwächter ist ein regelbasierter, zustandsabhängiger Agent. Er
 > erstellt pro Eingang einen Ausführungsplan, wählt notwendige
-> Prüfwerkzeuge, überspringt ungeeignete Schritte und entscheidet anhand
-> von Evidenz und vorhandenem Bestand über die nächste Aktion.
+> Prüfwerkzeuge, überspringt ungeeignete Schritte, verbindet die Dokumente
+> einer E-Mail zu einem Kostenvorgang und entscheidet anhand von Evidenz
+> und vorhandenem Bestand über die nächste Aktion.
 
 ## Das Problem
 
@@ -56,7 +58,7 @@ Ergebnis des Feasibility-Gates, siehe `docs/FEASIBILITY_INPUTS.md`.
 |---|---|
 | PDF mit Textebene | Vollständige, deterministische Extraktion (`pypdf`), Checkliste, Bestandsabgleich, Abo-Radar |
 | PNG / JPG | Wird angenommen und per Dateisignatur korrekt klassifiziert. Keine automatische Feldextraktion (OCR-Gate nicht bestanden, kein lokales OCR-Werkzeug ohne systemweite Installation) — landet immer in Review mit "Original angefordert" |
-| EML | In diesem Slice nicht implementiert (Kürzungsreihenfolge, siehe MASTER_PLAN) |
+| EML (heruntergeladene E-Mail) | Wird lokal zerlegt (reine Standardbibliothek `email`): ein Kostenvorgang pro E-Mail, PDF-Anhänge laufen per Dateisignatur (nie nach dem deklarierten MIME-Typ) durch die normale PDF-Pipeline, eine Rechnung nur im Mailtext wird als eigener Beleg gelesen. Rechnung und Zahlungsbeleg desselben Vorgangs werden per Dokumentart unterschieden und nie als Dublette verwechselt; byte-identische Wiederhol-Uploads werden als Datei-Duplikat aussortiert. Die nächste Aktivität wird nur mit Evidenz eingeordnet: explizites Verlängerungsdatum → "Nächste Zahlung (bestätigt)", Leistungszeitraum → höchstens "Nächster Beleg erwartet", sonst "unbekannt". Kein Postfach-Zugriff (kein IMAP/Gmail), keine Links werden geöffnet |
 | Beschädigte/unlesbare PDF | Wird erkannt und ehrlich als "fehlgeschlagen" gemeldet, nichts wird erfunden |
 
 Welche Entscheidungen sind regelbasiert und welche heuristisch: Dateityp-
@@ -103,16 +105,26 @@ Bewerten, Handeln, Erklären, Erinnern — Details in `docs/MASTER_PLAN.md`
 Abschnitt 30b). Für dieselbe Datei kann die Entscheidung unterschiedlich
 ausfallen, je nachdem was vorher schon verarbeitet wurde.
 
-## Bekannte Einschränkungen (Stand Arbeitsblock 3)
+## Bekannte Einschränkungen (Stand Arbeitsblock 4)
 
-- Feldextraktion aus PDF ist musterbasiert für "Label: Wert"-Zeilen, kein
-  allgemeiner Rechnungs-Parser für beliebige reale Rechnungslayouts.
+- Feldextraktion aus PDF und Mailtext ist musterbasiert für
+  "Label: Wert"-Zeilen, kein allgemeiner Rechnungs-Parser für beliebige
+  reale Rechnungs- oder Mail-Layouts.
+- EML-Verarbeitung meint hochgeladene .eml-Dateien: kein Postfach-Zugriff
+  (kein IMAP, keine Gmail-API), keine Links werden geöffnet, keine Inhalte
+  nachgeladen. Nicht-PDF-Anhänge laufen ohne Extraktion in "Original
+  anfordern".
+- Die Dokumentart-Einordnung ist eine feste Schlüsselwort-Prioritätsliste
+  (fail-closed "unbestimmt"), keine allgemeine Klassifikation.
+- Die nächste Aktivität eines Vorgangs wird nur mit expliziter Evidenz
+  gesetzt (Verlängerungsdatum oder Leistungszeitraum); es gibt bewusst
+  keine Wahrscheinlichkeits- oder Rhythmusschätzung.
 - Bild-OCR ist nicht aktiviert (siehe Feasibility-Gate); Bilder werden immer
   in Review geroutet.
 - Radar-Zustand "Beleg fehlt" (erwarteter, aber nicht eingegangener
   wiederkehrender Beleg) ist im Datenmodell vorgesehen, wird aber von den
   aktuellen Demo-Fixtures nicht ausgelöst.
-- Kein Mehrbenutzer-/Mandantenbetrieb, keine Mail-Anbindung, kein
+- Kein Mehrbenutzer-/Mandantenbetrieb, keine Postfach-Anbindung, kein
   Bank-Abgleich (bewusste Nicht-Ziele, siehe MASTER_PLAN Abschnitt 12).
 
 ## Was während der Challenge entstanden ist

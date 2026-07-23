@@ -1353,6 +1353,48 @@ class EmlDeterminismusTest(IsolierteDatenbankTestCase):
         self.assertEqual(erster, zweiter)
 
 
+class EmlHttpTest(HttpTestCase):
+    """Ende-zu-Ende ueber die echte HTTP-API: EML-Upload, Vorgang in der
+    Ergebnis-Antwort, keine absoluten Pfade."""
+
+    def test_eml_upload_ende_zu_ende(self):
+        status, daten = self._upload(
+            [("cloudbasis_rechnung_und_zahlung.eml", _lesen("cloudbasis_rechnung_und_zahlung.eml"))]
+        )
+        self.assertEqual(status, 200)
+        antwort = json.loads(daten)
+        self.assertEqual(len(antwort["belege"]), 2)
+        self.assertEqual(
+            sorted(b["dokumentart"] for b in antwort["belege"]), ["rechnung", "zahlungsbeleg"]
+        )
+        self.assertEqual([b["ausgang"] for b in antwort["belege"]], ["uebernommen", "uebernommen"])
+
+        status, daten = self._senden("GET", "/api/ergebnis", host=f"127.0.0.1:{self.port}")
+        self.assertEqual(status, 200)
+        ergebnis = json.loads(daten)
+        self.assertEqual(len(ergebnis["vorgaenge"]), 1)
+        vorgang_json = ergebnis["vorgaenge"][0]
+        self.assertEqual(vorgang_json["betreff"], "Ihre CloudBasis Rechnung August 2026")
+        self.assertEqual(vorgang_json["naechste_aktivitaet_status"], "erwartet")
+        self.assertEqual(vorgang_json["naechste_aktivitaet_art"], "beleg")
+        beleg_vorgang_ids = {b["vorgang_id"] for b in ergebnis["belege"]}
+        self.assertEqual(beleg_vorgang_ids, {vorgang_json["id"]})
+
+        text = daten.decode("utf-8")
+        self.assertNotIn("C:\\", text)
+        self.assertNotIn(str(REPO_ROOT), text)
+
+    def test_falsch_benannte_eml_landet_in_review(self):
+        status, daten = self._upload(
+            [("getarnt.txt", _lesen("mobiltel_zahlungsbestaetigung.eml"))]
+        )
+        self.assertEqual(status, 200)
+        antwort = json.loads(daten)
+        self.assertEqual(len(antwort["belege"]), 1)
+        self.assertEqual(antwort["belege"][0]["ausgang"], AUSGANG_REVIEW)
+        self.assertIn("widersprechen", antwort["belege"][0]["begruendung"])
+
+
 class Migration3Test(unittest.TestCase):
     """Eine bestehende v2-Datenbank migriert sicher auf v3: Backfill ohne
     Raten, neue vorgaenge-Tabelle, optionale beleg_id in beleg_plaene."""

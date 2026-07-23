@@ -155,6 +155,23 @@ main { max-width: 1120px; margin: 0 auto; padding: 8px 20px 40px; }
 .beleg-meta { color: var(--text-leise); font-size: 0.88rem; }
 .beleg-begruendung { font-size: 0.9rem; color: var(--text-leise); }
 .beleg-liste li.review-zuerst { order: -1; }
+/* Dokumente eines E-Mail-Vorgangs bleiben unter ihrem Gruppenkopf stehen,
+   auch wenn eines davon eine offene Pruefung hat. */
+.beleg-liste li.vorgang-mitglied.review-zuerst { order: 0; }
+
+/* Vorgangs-Gruppenkopf (E-Mail-Vorgang) */
+.vorgang-kopf {
+  margin-top: 6px;
+  padding: 8px 12px 6px;
+  border-left: 3px solid var(--akzent, #2563eb);
+  background: var(--flaeche-leise, rgba(37, 99, 235, 0.06));
+  border-radius: 8px 8px 0 0;
+}
+.vorgang-zeile { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.vorgang-titel { font-weight: 600; font-size: 0.95rem; }
+.vorgang-absender { color: var(--text-leise); font-size: 0.85rem; }
+.vorgang-begruendung { color: var(--text-leise); font-size: 0.85rem; margin-top: 2px; }
+.beleg-liste li.vorgang-mitglied { margin-left: 14px; }
 
 .badge {
   display: inline-block;

@@ -71,6 +71,8 @@ def _beleg_zu_json(row: dict, plaene: list[dict]) -> dict:
         "checkliste": checkliste,
         "ausgang": row["ausgang"],
         "begruendung": bereinigen(row["begruendung"]),
+        "dokumentart": row["dokumentart"],
+        "vorgang_id": row["vorgang_id"],
         "dokumentstatus": row["dokumentstatus"],
         "reviewstatus": row["reviewstatus"],
         "review_aufgabe": row["review_aufgabe"],
@@ -78,6 +80,24 @@ def _beleg_zu_json(row: dict, plaene: list[dict]) -> dict:
         "radar_begruendung": row["radar_begruendung"],
         "erfasst_am": row["erfasst_am"],
         "plaene": [p["plan"] for p in plaene],
+    }
+
+
+def _vorgang_zu_json(row: dict) -> dict:
+    return {
+        "id": row["id"],
+        "lauf_id": row["lauf_id"],
+        "quelle": row["quelle"],
+        "eml_dateiname": row["eml_dateiname"],
+        "eml_hash": row["eml_hash"],
+        "betreff": row["betreff"],
+        "absender": row["absender"],
+        "mail_datum": row["mail_datum"],
+        "naechste_aktivitaet_art": row["naechste_aktivitaet_art"],
+        "naechste_aktivitaet_status": row["naechste_aktivitaet_status"],
+        "naechste_aktivitaet_datum": row["naechste_aktivitaet_datum"],
+        "naechste_aktivitaet_begruendung": bereinigen(row["naechste_aktivitaet_begruendung"] or ""),
+        "erstellt_am": row["erstellt_am"],
     }
 
 
@@ -195,8 +215,9 @@ class BelegwaechterHandler(BaseHTTPRequestHandler):
                 _beleg_zu_json(r, speicher.plaene_fuer_beleg(conn, r["id"]))
                 for r in speicher.alle_belege(conn)
             ]
+            vorgaenge = [_vorgang_zu_json(r) for r in speicher.vorgaenge_liste(conn)]
             conn.close()
-            self._json(200, {"belege": belege})
+            self._json(200, {"belege": belege, "vorgaenge": vorgaenge})
         elif self.path == "/api/radar":
             erlaubt, code, fehler = _zugriff_erlaubt(self, veraendernd=False)
             if not erlaubt:
@@ -317,6 +338,8 @@ class BelegwaechterHandler(BaseHTTPRequestHandler):
                             "ausgang": b.ausgang,
                             "begruendung": bereinigen(b.begruendung),
                             "stufe": b.stufe,
+                            "dokumentart": b.dokumentart,
+                            "vorgang_id": b.vorgang_id,
                             "dokumentstatus": b.dokumentstatus,
                             "reviewstatus": b.reviewstatus,
                             "review_aufgabe": b.review_aufgabe,

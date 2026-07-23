@@ -29,10 +29,10 @@
     <h2 id="eingang-h" class="zonen-titel">Kosten-Inbox</h2>
     <button id="upload-zone" class="upload-zone" type="button" aria-describedby="upload-hinweis">
       <svg viewBox="0 0 24 24" aria-hidden="true" class="upload-icon"><path d="M12 16V5m0 0-4 4m4-4 4 4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 17v2a1.5 1.5 0 0 0 1.5 1.5h13A1.5 1.5 0 0 0 20 19v-2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
-      <span class="upload-text">Belege hier ablegen oder klicken: PDF, PNG, JPG</span>
+      <span class="upload-text">Belege hier ablegen oder klicken: PDF, PNG, JPG oder E-Mail (.eml)</span>
       <span class="upload-sub" id="upload-hinweis">Manuelle Zuführung, danach arbeitet der Agent selbstständig: erkennen, prüfen, abgleichen, entscheiden.</span>
     </button>
-    <input type="file" id="datei-input" class="datei-input" multiple accept=".pdf,.png,.jpg,.jpeg,application/pdf,image/png,image/jpeg">
+    <input type="file" id="datei-input" class="datei-input" multiple accept=".pdf,.png,.jpg,.jpeg,.eml,application/pdf,image/png,image/jpeg,message/rfc822">
     <p id="datei-ausgewaehlt" class="datei-ausgewaehlt" hidden></p>
     <div id="fehler-hinweis" class="fehler-hinweis" role="alert" hidden></div>
     <div id="schritte" class="schritte" aria-live="polite" hidden>

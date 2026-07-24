@@ -98,12 +98,18 @@ _BEKANNTE_SCHRITTNAMEN_JE_WERKZEUG = {
 @dataclass
 class EmlKontext:
     """Verarbeitungskontext fuer Dokumente, die aus einer EML stammen: die
-    Zuordnung zum Kostenvorgang, der Mail-Betreff als zusaetzliches
-    Klassifikationssignal und -- nur fuer den Mailtext-Beleg -- der bereits
-    dekodierte Text samt Dateityp-Festlegung."""
+    Zuordnung zum Kostenvorgang, Betreff und Mailtext als schwaechste,
+    nachrangige Klassifikationssignale (siehe dokumentart.klassifizieren --
+    der eigene Textinhalt eines Anhangs hat immer Vorrang) und -- nur fuer
+    den Mailtext-Beleg selbst -- der bereits dekodierte Text samt
+    Dateityp-Festlegung. Auch der Absender dient nur als transparenter
+    Anbieter-Fallback, wenn das PDF selbst keine belastbare Organisation
+    liefert (siehe extrahieren.felder_aus_text)."""
 
     vorgang_id: str
     betreff: str = ""
+    mailtext: str = ""
+    absender: str = ""
     text_override: str | None = None
     dateityp_override: str | None = None
 
@@ -316,7 +322,10 @@ def verarbeite_datei(
             text_lesbar = bool(text.strip())
             if text_lesbar:
                 herkunft = "aus Mailtext" if werkzeugname == "mailtext" else "aus PDF-Text"
-                beleg.felder = extrahieren.felder_aus_text(text, herkunft=herkunft)
+                beleg.felder = extrahieren.felder_aus_text(
+                    text, herkunft=herkunft,
+                    absender_fallback=kontext.absender if kontext else None,
+                )
                 beleg.extraktionsmethode = methode
                 extrahierter_text = text
                 gefunden = sum(1 for f in beleg.felder.values() if f.wert)
@@ -362,6 +371,7 @@ def verarbeite_datei(
             extrahierter_text,
             dateiname=beleg.dateiname,
             betreff=kontext.betreff if kontext else "",
+            mailtext=kontext.mailtext if kontext else "",
             betrag_vorhanden=bool(beleg.feldwert("betrag")),
         )
         beleg.dokumentart = art
@@ -600,7 +610,9 @@ def verarbeite_eml(
 
     # 5. Dokumente verarbeiten: Anhaenge immer, der Mailtext nur, wenn der
     # Plan das Werkzeug 'textkoerper' aktiv gelassen hat.
-    kontext = EmlKontext(vorgang_id=vorgang_id, betreff=eml.betreff)
+    kontext = EmlKontext(
+        vorgang_id=vorgang_id, betreff=eml.betreff, mailtext=eml.text, absender=eml.absender
+    )
     belege: list[Beleg] = []
     for anhang in eml.anhaenge:
         belege.append(verarbeite_datei(conn, lauf_id, anhang.dateiname, anhang.inhalt, kontext=kontext))
@@ -608,7 +620,7 @@ def verarbeite_eml(
     if plan.werkzeug_aktiv("textkoerper"):
         stamm = anzeigename.rsplit(".", 1)[0] if "." in anzeigename else anzeigename
         mailtext_kontext = EmlKontext(
-            vorgang_id=vorgang_id, betreff=eml.betreff,
+            vorgang_id=vorgang_id, betreff=eml.betreff, absender=eml.absender,
             text_override=eml.text, dateityp_override="MAILTEXT",
         )
         belege.append(

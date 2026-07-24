@@ -922,6 +922,65 @@ class GrenzenTest(HttpTestCase):
         self.assertIn(AUSGANG_FEHLGESCHLAGEN, ausgaenge)
 
 
+class CsvKostenexportTest(HttpTestCase):
+    """Die Kosten-CSV bildet wirtschaftliche Kosten ab, nicht jede
+    vorhandene Nachweisdatei: Rechnung und Zahlungsbeleg desselben Vorgangs
+    duerfen die Kosten nicht doppelt zaehlen."""
+
+    def _csv_holen(self) -> str:
+        status, daten = self._senden("GET", "/api/export.csv", host=f"127.0.0.1:{self.port}")
+        self.assertEqual(status, 200)
+        return daten.decode("utf-8-sig")
+
+    def _datenzeilen(self, csv_text: str) -> list[str]:
+        zeilen = [z for z in csv_text.splitlines() if z.strip()]
+        return zeilen[1:]  # erste Zeile ist der Header
+
+    def test_rechnung_und_zahlungsbeleg_gleicher_betrag_ergibt_genau_eine_kostenzeile(self):
+        self._upload_ok(
+            [("cloudbasis_rechnung_und_zahlung.eml", _lesen("cloudbasis_rechnung_und_zahlung.eml"))]
+        )
+        zeilen = self._datenzeilen(self._csv_holen())
+        self.assertEqual(len(zeilen), 1, "Rechnung und Zahlungsbeleg desselben Vorgangs duerfen nicht doppelt zaehlen")
+        self.assertIn("23.00", zeilen[0])
+        self.assertNotIn("46.00", zeilen[0])
+
+    def test_nur_zahlungsbeleg_ergibt_keine_kostenzeile(self):
+        zahlungsbeleg = _synthetische_rechnung(
+            [
+                "Anbieter GmbH", "Zahlungsbeleg", "Zahlung erhalten zur Rechnung Nr. RE-1",
+                "Datum: 01.08.2026", "Leistungszeitraum: monatlich", "Tarif: Standard",
+                "Betrag: 23,00 EUR", "Waehrung: EUR",
+            ]
+        )
+        status, antwort = self._upload_ok([("zahlungsbeleg.pdf", zahlungsbeleg)])
+        antwort_json = json.loads(antwort)
+        self.assertEqual(antwort_json["belege"][0]["ausgang"], AUSGANG_UEBERNOMMEN)
+        self.assertEqual(antwort_json["belege"][0]["dokumentart"], "zahlungsbeleg")
+        zeilen = self._datenzeilen(self._csv_holen())
+        self.assertEqual(zeilen, [])
+
+    def test_abo_bestaetigung_ergibt_keine_kostenzeile(self):
+        self._upload_ok(
+            [("schreibki_abo_bestaetigung.eml", _lesen("schreibki_abo_bestaetigung.eml"))]
+        )
+        zeilen = self._datenzeilen(self._csv_holen())
+        self.assertEqual(zeilen, [])
+
+    def test_uebernommene_rechnung_ergibt_eine_kostenzeile(self):
+        rechnung = _synthetische_rechnung(
+            [
+                "Anbieter GmbH", "Rechnung Nr. RE-2", "Datum: 01.08.2026",
+                "Leistungszeitraum: monatlich", "Tarif: Standard",
+                "Betrag: 15,00 EUR", "Waehrung: EUR",
+            ]
+        )
+        self._upload_ok([("rechnung.pdf", rechnung)])
+        zeilen = self._datenzeilen(self._csv_holen())
+        self.assertEqual(len(zeilen), 1)
+        self.assertIn("15.00", zeilen[0])
+
+
 class CsvSicherheitTest(HttpTestCase):
     def _csv_holen(self) -> str:
         status, daten = self._senden("GET", "/api/export.csv", host=f"127.0.0.1:{self.port}")
@@ -1136,6 +1195,103 @@ class DokumentartTest(unittest.TestCase):
     def test_anbietername_mit_zahl_wortstamm_ist_kein_zahlungsbeleg(self):
         art, _ = dokumentart.klassifizieren("Zahlbar GmbH\nRechnung Nr. ZB-1")
         self.assertEqual(art, "rechnung")
+
+    def test_englische_schluesselwoerter_werden_erkannt(self):
+        self.assertEqual(dokumentart.klassifizieren("Invoice\nInvoice number: INV-1")[0], "rechnung")
+        self.assertEqual(dokumentart.klassifizieren("Receipt\nPayment received")[0], "zahlungsbeleg")
+        self.assertEqual(dokumentart.klassifizieren("Payment receipt\nInvoice number: INV-1")[0], "zahlungsbeleg")
+
+    def test_eigener_textinhalt_hat_vorrang_vor_betreff(self):
+        """Der Betreff einer Zahlungsbeleg-Mail darf eine enthaltene
+        Rechnungs-PDF nicht zum Zahlungsbeleg machen: der eigene Textinhalt
+        des Anhangs gewinnt immer."""
+        art, begruendung = dokumentart.klassifizieren(
+            "Anbieter GmbH\nRechnung Nr. RE-1", betreff="Ihr Zahlungsbeleg"
+        )
+        self.assertEqual(art, "rechnung")
+        self.assertIn("Textinhalt", begruendung)
+
+    def test_dateiname_ist_zweite_prioritaet_vor_betreff(self):
+        art, begruendung = dokumentart.klassifizieren(
+            "", dateiname="zahlungsbeleg.pdf", betreff="Ihre Rechnung"
+        )
+        self.assertEqual(art, "zahlungsbeleg")
+        self.assertIn("Dateiname", begruendung)
+
+    def test_betreff_und_mailtext_nur_als_letzter_fallback(self):
+        art, begruendung = dokumentart.klassifizieren(
+            "", dateiname="anhang.pdf", betreff="Ihr Zahlungsbeleg"
+        )
+        self.assertEqual(art, "zahlungsbeleg")
+        self.assertIn("Fallback", begruendung)
+
+        art2, _ = dokumentart.klassifizieren("", dateiname="anhang.pdf", mailtext="Vielen Dank fuer Ihre Rechnung.")
+        self.assertEqual(art2, "rechnung")
+
+
+def _eml_mit_generischen_anhaengen(betreff: str, anhaenge: list[tuple[str, list[str]]]) -> bytes:
+    """Baut eine synthetische EML mit gegebenem Betreff und PDF-Anhaengen,
+    ausschliesslich fuer Tests der Dokumentart-Evidenzpriorisierung. Nur
+    generische Bezeichnungen, keine Firmennamen oder echten Werte."""
+    from email.message import EmailMessage
+
+    sys.path.insert(0, str(REPO_ROOT / "fixtures"))
+    import erzeugen  # type: ignore
+
+    msg = EmailMessage()
+    msg["From"] = "Anbieter GmbH <rechnungen@beispiel.invalid>"
+    msg["To"] = "demo@belegwaechter.invalid"
+    msg["Subject"] = betreff
+    msg["Date"] = "Mon, 03 Aug 2026 09:00:00 +0200"
+    msg["Message-ID"] = "<test-generisch@beispiel.invalid>"
+    msg.set_content("Anbei die Dokumente zu Ihrem Vorgang.")
+    for name, zeilen in anhaenge:
+        msg.add_attachment(
+            erzeugen._pdf_bytes(zeilen), maintype="application", subtype="pdf", filename=name
+        )
+    for teil in msg.walk():
+        if teil.is_multipart():
+            teil.set_boundary("test-boundary-fixiert")
+    return msg.as_bytes()
+
+
+class DokumentklassifikationEvidenzTest(IsolierteDatenbankTestCase):
+    """Akzeptanzkriterium: eine EML mit dem Betreff 'Ihr Zahlungsbeleg' kann
+    trotzdem eine Rechnung und einen Zahlungsbeleg enthalten -- jeder
+    Anhang wird nach seinem EIGENEN Textinhalt klassifiziert, nicht nach
+    dem irrefuehrenden Betreff."""
+
+    def test_irrefuehrender_betreff_aendert_anhang_klassifikation_nicht(self):
+        eml_bytes = _eml_mit_generischen_anhaengen(
+            "Ihr Zahlungsbeleg",
+            [
+                (
+                    "rechnung.pdf",
+                    [
+                        "Anbieter GmbH", "Rechnung Nr. RE-9001", "Datum: 01.08.2026",
+                        "Leistungszeitraum: monatlich", "Tarif: Standard",
+                        "Betrag: 19,00 EUR", "Waehrung: EUR",
+                    ],
+                ),
+                (
+                    "zahlungsbeleg.pdf",
+                    [
+                        "Anbieter GmbH", "Zahlungsbeleg", "Zahlung erhalten zur Rechnung Nr. RE-9001",
+                        "Datum: 01.08.2026", "Leistungszeitraum: monatlich",
+                        "Tarif: Standard", "Betrag: 19,00 EUR", "Waehrung: EUR",
+                    ],
+                ),
+            ],
+        )
+        _, belege = agent.verarbeite_eml(
+            self.conn, speicher.neuer_lauf(self.conn), "test.eml", eml_bytes
+        )
+        arten = {b.dateiname: b.dokumentart for b in belege}
+        self.assertEqual(arten["rechnung.pdf"], "rechnung")
+        self.assertEqual(arten["zahlungsbeleg.pdf"], "zahlungsbeleg")
+        ausgaenge = {b.dateiname: b.ausgang for b in belege}
+        self.assertEqual(ausgaenge["rechnung.pdf"], AUSGANG_UEBERNOMMEN)
+        self.assertEqual(ausgaenge["zahlungsbeleg.pdf"], AUSGANG_UEBERNOMMEN)
 
 
 class DokumentartWerkzeugTest(IsolierteDatenbankTestCase):

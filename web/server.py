@@ -41,6 +41,14 @@ _ASSET_CONTENT_TYPES = {
     ".webp": "image/webp",
 }
 
+# Die Kosten-CSV bildet wirtschaftliche Kosten ab, nicht jede vorhandene
+# Nachweisdatei: Rechnung und Zahlungsbeleg desselben Vorgangs sind im
+# Bestand, in der UI, im Audit und am Vorgang weiterhin getrennt sichtbar,
+# aber nur die Rechnung (bzw. ein sonstiger Kostennachweis ohne Rechnung)
+# zaehlt als Kostenzeile. Ein Zahlungsbeleg oder eine Abo-Bestaetigung
+# duerfen die Kosten nie ein zweites Mal aufsummieren.
+_CSV_EXPORTIERBARE_DOKUMENTARTEN = {"rechnung", "sonstiger_kostennachweis"}
+
 MAX_ANFRAGE_BYTES = 20 * 1024 * 1024  # gesamte HTTP-Anfrage
 MAX_DATEI_BYTES = 10 * 1024 * 1024  # einzelne Datei
 MAX_DATEIEN_JE_CHARGE = 25
@@ -297,6 +305,8 @@ class BelegwaechterHandler(BaseHTTPRequestHandler):
             )
             for b in belege:
                 if b["ausgang"] != "uebernommen":
+                    continue
+                if b["dokumentart"] not in _CSV_EXPORTIERBARE_DOKUMENTARTEN:
                     continue
                 schreiber.writerow(
                     [

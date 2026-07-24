@@ -23,7 +23,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
-from belegwaechter import agent, dateinamen, datumformat, speicher, steuerzeichen  # noqa: E402
+from belegwaechter import agent, dateinamen, datumformat, exportregeln, speicher, steuerzeichen  # noqa: E402
 from belegwaechter.fehlertexte import bereinigen  # noqa: E402
 
 HOST = "127.0.0.1"
@@ -44,12 +44,8 @@ _ASSET_CONTENT_TYPES = {
 }
 
 # Die Kosten-CSV bildet wirtschaftliche Kosten ab, nicht jede vorhandene
-# Nachweisdatei: Rechnung und Zahlungsbeleg desselben Vorgangs sind im
-# Bestand, in der UI, im Audit und am Vorgang weiterhin getrennt sichtbar,
-# aber nur die Rechnung (bzw. ein sonstiger Kostennachweis ohne Rechnung)
-# zaehlt als Kostenzeile. Ein Zahlungsbeleg oder eine Abo-Bestaetigung
-# duerfen die Kosten nie ein zweites Mal aufsummieren.
-_CSV_EXPORTIERBARE_DOKUMENTARTEN = {"rechnung", "sonstiger_kostennachweis"}
+# Nachweisdatei. Die alleinige Quelle fuer Exportfaehigkeit (Dokumentart,
+# Ausgang, kritische Vollstaendigkeit) ist exportregeln.exportfaehig().
 
 # Benutzerfreundliche Anzeige des Quellenstatus in der Kosten-CSV statt des
 # internen Slugs; unbekannte Werte fallen unveraendert durch.
@@ -133,6 +129,11 @@ def _beleg_zu_json(row: dict, plaene: list[dict]) -> dict:
     return {
         **ergebnis_zusatz,
         "original_pdf_verfuegbar": pdf_verfuegbar,
+        # Berechnetes Feld aus der zentralen Exportregel -- die UI leitet
+        # "Für Export bereit" nie selbst aus Statuswerten ab.
+        "exportbereit": exportregeln.exportfaehig(
+            row["dokumentart"], row["ausgang"], exportregeln.checkliste_aus_json(checkliste)
+        ),
         "id": row["id"],
         "lauf_id": row["lauf_id"],
         "dateiname": row["dateiname"],
@@ -375,6 +376,9 @@ class BelegwaechterHandler(BaseHTTPRequestHandler):
                 self._json(code, fehler)
                 return
             conn = speicher.verbindung()
+            # Kostenrelevante Radar-Karten folgen der zentralen
+            # Exportregel: nur exportfaehige Kosten-Belege bilden eine
+            # eigene Karte.
             radar = [
                 {
                     "anbieter": _api_text(r["anbieter"]),
@@ -387,6 +391,7 @@ class BelegwaechterHandler(BaseHTTPRequestHandler):
                     "review_aufgabe": r["review_aufgabe"],
                 }
                 for r in speicher.radar_uebersicht(conn)
+                if exportregeln.exportfaehig_zeile(r)
             ]
             conn.close()
             self._json(200, {"radar": radar})
@@ -413,9 +418,7 @@ class BelegwaechterHandler(BaseHTTPRequestHandler):
                 ["Anbieter", "Datum", "Betrag", "Waehrung", "Zeitraum", "Referenz", "Quellenstatus", "Quelldatei"]
             )
             for b in belege:
-                if b["ausgang"] != "uebernommen":
-                    continue
-                if b["dokumentart"] not in _CSV_EXPORTIERBARE_DOKUMENTARTEN:
+                if not exportregeln.exportfaehig_zeile(b):
                     continue
                 schreiber.writerow(
                     [

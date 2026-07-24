@@ -23,7 +23,11 @@ from belegwaechter.modelle import (
     Beleg,
     Checkpunkt,
 )
-from belegwaechter.pruefen import fehlende_punkte, vollstaendig
+from belegwaechter.pruefen import (
+    fehlende_kritische,
+    fehlende_pruefenswerte,
+    kritisch_vollstaendig,
+)
 
 
 def entscheiden(
@@ -85,18 +89,31 @@ def entscheiden(
             None,
         )
 
-    if not vollstaendig(checkliste):
-        fehlend = ", ".join(fehlende_punkte(checkliste))
+    # Dokumentartabhaengige Vollstaendigkeit: nur fehlende KRITISCHE
+    # Angaben verhindern die Uebernahme. Fehlende pruefenswerte Angaben
+    # (z.B. Rechnungsnummer oder Leistungszeitraum) fuehren nie zur
+    # automatischen Ablehnung, sondern zu einer offenen Pruefaufgabe am
+    # uebernommenen Beleg (siehe agent._status_ableiten).
+    if not kritisch_vollstaendig(checkliste):
+        fehlend = ", ".join(fehlende_kritische(checkliste))
         return (
             AUSGANG_REVIEW,
-            f"Bitte ansehen: folgende Punkte sind nicht eindeutig erfüllt: "
-            f"{fehlend}.",
+            f"Bitte ansehen: folgende kritische Angaben sind nicht eindeutig "
+            f"erfüllt: {fehlend}.",
+            None,
+        )
+
+    pruefenswert_offen = fehlende_pruefenswerte(checkliste)
+    if pruefenswert_offen:
+        return (
+            AUSGANG_UEBERNOMMEN,
+            "Übernommen: alle kritischen Angaben vorhanden. Noch zu prüfen: "
+            + ", ".join(pruefenswert_offen) + ".",
             None,
         )
 
     return (
         AUSGANG_UEBERNOMMEN,
-        f"Übernommen: alle {len(checkliste)} Checklisten-Punkte erfüllt, "
-        "Original vorhanden.",
+        "Übernommen: alle kritischen Angaben vorhanden, Original vorhanden.",
         None,
     )

@@ -375,7 +375,16 @@ def beleg_speichern(
         ensure_ascii=False,
     )
     checkliste_json = json.dumps(
-        [{"name": c.name, "erfuellt": c.erfuellt} for c in beleg.checkliste],
+        [
+            {
+                "name": c.name,
+                "erfuellt": c.erfuellt,
+                "kategorie": c.kategorie,
+                "feld": c.feld,
+                "nicht_vorhanden": c.nicht_vorhanden,
+            }
+            for c in beleg.checkliste
+        ],
         ensure_ascii=False,
     )
     conn.execute(

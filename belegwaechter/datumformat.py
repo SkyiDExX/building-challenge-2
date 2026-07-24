@@ -28,6 +28,13 @@ _DE_NUMERISCH = re.compile(r"\b(\d{2})\.(\d{2})\.(\d{4})\b")
 _DE_AUSGESCHRIEBEN = re.compile(r"\b(\d{1,2})\.\s*([A-Za-zÄÖÜäöü]+)\s+(\d{4})\b")
 _EN = re.compile(r"\b([A-Za-z]+)\.?\s+(\d{1,2}),\s*(\d{4})\b")
 
+# Englischer Bereich mit nur einmal genanntem Jahr, beliebiger
+# Gross-/Kleinschreibung und Bindestrich, Halbgeviertstrich oder
+# Gedankenstrich als Trenner: "jul 15-aug 15, 2026", "jun 22 – jul 21, 2026".
+_EN_BEREICH_EIN_JAHR = re.compile(
+    r"\b([A-Za-z]+)\.?\s+(\d{1,2})\s*[-–—]\s*([A-Za-z]+)\.?\s+(\d{1,2}),?\s*(\d{4})\b"
+)
+
 
 def _monat(name: str) -> int | None:
     return _MONATE.get(name.lower())
@@ -79,13 +86,36 @@ def datum_csv(wert: str | None) -> str | None:
     return d.isoformat() if d else wert
 
 
+def _bereich(wert: str) -> tuple[date, date] | None:
+    """Sicher erkannter Datumsbereich oder None. Beim Ein-Jahr-Muster gilt
+    das genannte Jahr fuer beide Seiten, aber nur wenn der Bereich damit
+    aufsteigend ist -- sonst wird nichts geraten und der Originalwert
+    bleibt als Review-Fall sichtbar."""
+    m = _EN_BEREICH_EIN_JAHR.search(wert)
+    if m:
+        monat_von, monat_bis = _monat(m.group(1)), _monat(m.group(3))
+        if monat_von is not None and monat_bis is not None:
+            try:
+                jahr = int(m.group(5))
+                von = date(jahr, monat_von, int(m.group(2)))
+                bis = date(jahr, monat_bis, int(m.group(4)))
+            except ValueError:
+                von, bis = None, None
+            if von is not None and bis is not None and von <= bis:
+                return von, bis
+    daten = _alle_daten(wert)
+    if len(daten) == 2:
+        return daten[0], daten[1]
+    return None
+
+
 def zeitraum_ui(wert: str | None) -> str | None:
     if not wert:
         return wert
-    daten = _alle_daten(wert)
-    if len(daten) != 2:
+    bereich = _bereich(wert)
+    if bereich is None:
         return wert
-    von, bis = daten
+    von, bis = bereich
     return (
         f"{von.day:02d}.{von.month:02d}.{von.year:04d} bis "
         f"{bis.day:02d}.{bis.month:02d}.{bis.year:04d}"
@@ -95,8 +125,8 @@ def zeitraum_ui(wert: str | None) -> str | None:
 def zeitraum_csv(wert: str | None) -> str | None:
     if not wert:
         return wert
-    daten = _alle_daten(wert)
-    if len(daten) != 2:
+    bereich = _bereich(wert)
+    if bereich is None:
         return wert
-    von, bis = daten
+    von, bis = bereich
     return f"{von.isoformat()} bis {bis.isoformat()}"

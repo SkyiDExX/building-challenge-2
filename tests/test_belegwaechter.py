@@ -167,7 +167,13 @@ class FehlendePflichtwerteTest(IsolierteDatenbankTestCase):
             Path(unvollstaendiges_pdf.name).unlink(missing_ok=True)
 
         beleg = agent.verarbeite_datei(self.conn, speicher.neuer_lauf(self.conn), "unvollstaendig.pdf", inhalt)
-        self.assertEqual(beleg.ausgang, AUSGANG_REVIEW)
+        # Dokumentartabhaengige Vollstaendigkeit: die Rechnungsnummer ist
+        # pruefenswert, nicht kritisch -- der Beleg wird uebernommen und
+        # behaelt eine offene Pruefaufgabe statt automatischer Ablehnung.
+        self.assertEqual(beleg.ausgang, AUSGANG_UEBERNOMMEN)
+        self.assertEqual(beleg.reviewstatus, "offen")
+        self.assertIn("Rechnungsnummer vorhanden", beleg.review_aufgabe)
+        self.assertIn("nicht vorhanden", beleg.review_aufgabe)
         fehlend = [c.name for c in beleg.checkliste if not c.erfuellt]
         self.assertIn("Rechnungsnummer vorhanden", fehlend)
         self.assertNotEqual(beleg.feldwert("betrag"), None, "Vorhandene Felder duerfen trotzdem erkannt werden")
@@ -2509,7 +2515,10 @@ class ZahlungsnachweisAufgabeTest(IsolierteDatenbankTestCase):
             self.conn, speicher.neuer_lauf(self.conn), "zahlung.pdf", inhalt
         )
         self.assertEqual(beleg.dokumentart, "zahlungsbeleg")
-        self.assertEqual(beleg.ausgang, AUSGANG_REVIEW)
+        # Kritische Angaben vorhanden: der Zahlungsnachweis wird uebernommen,
+        # behaelt aber die offene Aufgabe, das fehlende Original zu beschaffen.
+        self.assertEqual(beleg.ausgang, AUSGANG_UEBERNOMMEN)
+        self.assertEqual(beleg.reviewstatus, "offen")
         self.assertEqual(beleg.review_aufgabe, "Rechnung oder Originalbeleg anfordern")
         self.assertNotIn("ergänzen", beleg.review_aufgabe)
 
@@ -2527,8 +2536,11 @@ class ZahlungsnachweisAufgabeTest(IsolierteDatenbankTestCase):
             self.conn, speicher.neuer_lauf(self.conn), "rechnung.pdf", inhalt
         )
         self.assertEqual(beleg.dokumentart, "rechnung")
-        self.assertEqual(beleg.ausgang, AUSGANG_REVIEW)
-        self.assertTrue(beleg.review_aufgabe.startswith("Fehlende Angaben ergänzen"))
+        # Referenz und Zeitraum sind pruefenswert: Uebernahme mit konkreter
+        # Pruef-/Bestaetigungsaufgabe statt automatischer Ablehnung.
+        self.assertEqual(beleg.ausgang, AUSGANG_UEBERNOMMEN)
+        self.assertEqual(beleg.reviewstatus, "offen")
+        self.assertIn("prüfen oder als 'im Original nicht vorhanden' bestätigen", beleg.review_aufgabe)
 
 
 class DatumformatTest(unittest.TestCase):
@@ -2670,6 +2682,178 @@ class DreiEbenenUiTest(unittest.TestCase):
     def test_offene_faelle_stehen_vor_fertigen(self):
         self.assertIn('b.reviewstatus === "offen"', self.js)
         self.assertIn("review-zuerst", self.css)
+
+
+class DokumentartChecklisteTest(unittest.TestCase):
+    """Dokumentartabhaengige Pflichtfelder mit Kategorien: kritisch
+    blockiert, pruefenswert erzeugt eine Aufgabe, optional blockiert nie.
+    'Im Original nicht vorhanden' erfuellt kritische Punkte NIEMALS."""
+
+    def _beleg(self, **felder) -> "Beleg":
+        from belegwaechter.modelle import Beleg, ExtrahiertesFeld
+
+        b = Beleg(id="t", lauf_id="t", dateiname="t.pdf", dateihash="h",
+                  dateityp="PDF", stufe="A", quellenstatus="original_vorhanden")
+        b.felder = {
+            name: ExtrahiertesFeld(name, felder.get(name), "aus PDF-Text" if felder.get(name) else "fehlt")
+            for name in ("anbieter", "datum", "betrag", "waehrung", "zeitraum", "tarif", "referenz")
+        }
+        return b
+
+    def test_rechnung_ohne_zeitraum_und_referenz_bleibt_kritisch_vollstaendig(self):
+        from belegwaechter import pruefen
+
+        beleg = self._beleg(anbieter="Beispiel AG", datum="01.08.2026", betrag="5,00", waehrung="EUR")
+        punkte = pruefen.checkliste_pruefen(beleg, text_lesbar=True, dokumentart="rechnung")
+        self.assertTrue(pruefen.kritisch_vollstaendig(punkte))
+        self.assertEqual(
+            pruefen.fehlende_pruefenswerte(punkte),
+            ["Rechnungsnummer vorhanden", "Zeitraum eindeutig"],
+        )
+
+    def test_rechnung_ohne_betrag_ist_kritisch_unvollstaendig(self):
+        from belegwaechter import pruefen
+
+        beleg = self._beleg(anbieter="Beispiel AG", datum="01.08.2026")
+        punkte = pruefen.checkliste_pruefen(beleg, text_lesbar=True, dokumentart="rechnung")
+        self.assertFalse(pruefen.kritisch_vollstaendig(punkte))
+        self.assertIn("Betrag und Währung erkannt", pruefen.fehlende_kritische(punkte))
+
+    def test_nicht_vorhanden_erfuellt_kritische_punkte_niemals(self):
+        from belegwaechter import pruefen
+
+        beleg = self._beleg(anbieter="Beispiel AG", datum="01.08.2026")
+        punkte = pruefen.checkliste_pruefen(
+            beleg, text_lesbar=True, dokumentart="rechnung",
+            nicht_vorhanden={"betrag", "waehrung", "zeitraum", "referenz"},
+        )
+        self.assertFalse(
+            pruefen.kritisch_vollstaendig(punkte),
+            "Ein als 'nicht vorhanden' bestätigter Betrag bleibt kritisch fehlend",
+        )
+        # Pruefenswerte Punkte duerfen dagegen abgeschlossen werden.
+        self.assertEqual(pruefen.fehlende_pruefenswerte(punkte), [])
+        zeitraum_punkt = next(p for p in punkte if p.feld == "zeitraum")
+        self.assertTrue(zeitraum_punkt.erfuellt)
+        self.assertTrue(zeitraum_punkt.nicht_vorhanden)
+
+    def test_abo_bestaetigung_braucht_nur_anbieter_kritisch(self):
+        from belegwaechter import pruefen
+
+        beleg = self._beleg(anbieter="Beispiel AG")
+        punkte = pruefen.checkliste_pruefen(beleg, text_lesbar=True, dokumentart="abo_bestaetigung")
+        self.assertTrue(pruefen.kritisch_vollstaendig(punkte))
+
+    def test_zahlungsbeleg_zeitraum_ist_optional(self):
+        from belegwaechter import pruefen
+        from belegwaechter.modelle import KATEGORIE_OPTIONAL
+
+        beleg = self._beleg(anbieter="Beispiel AG", datum="01.08.2026", betrag="5,00", waehrung="EUR")
+        punkte = pruefen.checkliste_pruefen(beleg, text_lesbar=True, dokumentart="zahlungsbeleg")
+        zeitraum_punkt = next(p for p in punkte if p.feld == "zeitraum")
+        self.assertEqual(zeitraum_punkt.kategorie, KATEGORIE_OPTIONAL)
+        self.assertTrue(pruefen.kritisch_vollstaendig(punkte))
+
+
+class ExportregelnTest(unittest.TestCase):
+    """Zentrale Exportfaehigkeit: alleinige Quelle fuer CSV, Baseline,
+    Radar-Kostenkarten und UI-Anzeige."""
+
+    def _checkliste(self, kritisch_ok: bool, nicht_vorhanden_kritisch: bool = False):
+        from belegwaechter.modelle import (
+            Checkpunkt, KATEGORIE_KRITISCH, KATEGORIE_PRUEFENSWERT,
+        )
+
+        return [
+            Checkpunkt("Anbieter erkannt", True, KATEGORIE_KRITISCH, "anbieter"),
+            Checkpunkt(
+                "Betrag und Währung erkannt",
+                kritisch_ok or nicht_vorhanden_kritisch,
+                KATEGORIE_KRITISCH,
+                "betrag",
+                nicht_vorhanden=nicht_vorhanden_kritisch,
+            ),
+            Checkpunkt("Zeitraum eindeutig", False, KATEGORIE_PRUEFENSWERT, "zeitraum"),
+        ]
+
+    def test_rechnung_mit_kritischer_luecke_nie_exportfaehig(self):
+        from belegwaechter import exportregeln
+
+        self.assertFalse(exportregeln.exportfaehig("rechnung", "uebernommen", self._checkliste(False)))
+
+    def test_kritisches_nicht_vorhanden_bleibt_nicht_exportfaehig(self):
+        from belegwaechter import exportregeln
+
+        checkliste = self._checkliste(False, nicht_vorhanden_kritisch=True)
+        self.assertFalse(
+            exportregeln.exportfaehig("rechnung", "uebernommen", checkliste),
+            "Ein als 'nicht vorhanden' bestätigtes kritisches Feld sperrt den Export",
+        )
+
+    def test_offene_pruefenswerte_aufgabe_verhindert_export_nicht(self):
+        from belegwaechter import exportregeln
+
+        self.assertTrue(exportregeln.exportfaehig("rechnung", "uebernommen", self._checkliste(True)))
+
+    def test_zahlungsbeleg_und_abo_nie_exportfaehig(self):
+        from belegwaechter import exportregeln
+
+        for art in ("zahlungsbeleg", "abo_bestaetigung", "unbestimmt", None):
+            self.assertFalse(exportregeln.exportfaehig(art, "uebernommen", self._checkliste(True)))
+
+    def test_dublette_und_fehlgeschlagen_nie_exportfaehig(self):
+        from belegwaechter import exportregeln
+
+        for ausgang in ("dublette", "fehlgeschlagen", "original_anfordern", "review"):
+            self.assertFalse(exportregeln.exportfaehig("rechnung", ausgang, self._checkliste(True)))
+
+    def test_altbestand_ohne_kategorie_wird_kritisch_gelesen(self):
+        from belegwaechter import exportregeln
+
+        checkliste = exportregeln.checkliste_aus_json(
+            [{"name": "Anbieter erkannt", "erfuellt": False}]
+        )
+        self.assertFalse(exportregeln.exportfaehig("rechnung", "uebernommen", checkliste))
+
+
+class DatumsbereichTest(unittest.TestCase):
+    """Einheitliche Bereichs-Normalisierung inkl. englischer Bereiche mit
+    nur einmal genanntem Jahr und gemischten Trennern."""
+
+    def test_englische_bereiche_mit_einem_jahr(self):
+        from belegwaechter import datumformat
+
+        self.assertEqual(
+            datumformat.zeitraum_ui("jul 15-aug 15, 2026"), "15.07.2026 bis 15.08.2026"
+        )
+        self.assertEqual(
+            datumformat.zeitraum_ui("jun 22 – jul 21, 2026"), "22.06.2026 bis 21.07.2026"
+        )
+        self.assertEqual(
+            datumformat.zeitraum_ui("Jul 15 — Aug 15, 2026"), "15.07.2026 bis 15.08.2026"
+        )
+        self.assertEqual(
+            datumformat.zeitraum_csv("jul 15-aug 15, 2026"), "2026-07-15 bis 2026-08-15"
+        )
+
+    def test_deutscher_bereich_und_bestehende_formate(self):
+        from belegwaechter import datumformat
+
+        self.assertEqual(
+            datumformat.zeitraum_ui("28.04.2026-28.05.2026"), "28.04.2026 bis 28.05.2026"
+        )
+        self.assertEqual(
+            datumformat.zeitraum_csv("28.04.2026 bis 28.05.2026"), "2026-04-28 bis 2026-05-28"
+        )
+
+    def test_absteigender_einjahres_bereich_wird_nicht_geraten(self):
+        from belegwaechter import datumformat
+
+        self.assertEqual(
+            datumformat.zeitraum_ui("dec 15-jan 15, 2026"), "dec 15-jan 15, 2026",
+            "Über den Jahreswechsel wird kein Jahr geraten",
+        )
+        self.assertEqual(datumformat.zeitraum_ui("monatlich"), "monatlich")
 
 
 if __name__ == "__main__":

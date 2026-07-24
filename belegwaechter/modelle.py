@@ -61,10 +61,27 @@ class ExtrahiertesFeld:
     herkunft: str  # "aus PDF-Text" | "aus Bild erfasst" | "fehlt"
 
 
+# Kategorien der dokumentartabhaengigen Vollstaendigkeitspruefung:
+# kritisch fehlend blockiert Uebernahme und Export; pruefenswert fehlend
+# erzeugt nur eine offene Pruefaufgabe; optional blockiert nie.
+KATEGORIE_KRITISCH = "kritisch"
+KATEGORIE_PRUEFENSWERT = "pruefenswert"
+KATEGORIE_OPTIONAL = "optional"
+
+
 @dataclass
 class Checkpunkt:
     name: str
     erfuellt: bool
+    kategorie: str = KATEGORIE_KRITISCH
+    # Feldname, auf den sich der Punkt bezieht (fuer manuelle Korrekturen
+    # und die "im Original nicht vorhanden"-Bestaetigung); None fuer
+    # feldunabhaengige Punkte wie die Lesbarkeit.
+    feld: str | None = None
+    # True, wenn der Punkt nur deshalb als erledigt gilt, weil der Nutzer
+    # die Angabe ausdruecklich als im Original nicht vorhanden bestaetigt
+    # hat. Fuer kritische Punkte ist das nie zulaessig.
+    nicht_vorhanden: bool = False
 
 
 @dataclass

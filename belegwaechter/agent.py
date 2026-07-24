@@ -25,10 +25,16 @@ from belegwaechter import extrahieren
 from belegwaechter import fehlertexte
 from belegwaechter import mailparser
 from belegwaechter import planen
+from belegwaechter import exportregeln
 from belegwaechter import radar as radar_modul
 from belegwaechter import speicher
 from belegwaechter import vorgang as vorgang_modul
-from belegwaechter.pruefen import checkliste_pruefen
+from belegwaechter.pruefen import (
+    checkliste_pruefen,
+    fehlende_kritische,
+    fehlende_pruefenswerte,
+    kritisch_vollstaendig,
+)
 from belegwaechter.modelle import (
     AUSGANG_DUBLETTE,
     AUSGANG_FEHLGESCHLAGEN,
@@ -174,26 +180,35 @@ def _plan_revidieren(
 
 
 def _status_ableiten(
-    ausgang: str, fehlende_checkliste: list[str], radar_einschaetzung: str | None
+    ausgang: str, checkliste, radar_einschaetzung: str | None
 ) -> tuple[str, str, str | None]:
-    """Leitet die drei orthogonalen Statusfelder aus dem fachlichen Ausgang
-    und der Radar-Einschaetzung ab. `ausgang` bleibt die primaere,
-    ausfuehrliche Fachentscheidung (siehe entscheiden.py); dokumentstatus/
-    reviewstatus/review_aufgabe machen zusaetzlich explizit, ob ein
-    vorbereiteter Beleg trotzdem noch eine offene Pruefaufgabe hat -- ein
-    unklarer Preisvergleich darf den Beleg ins Paket aufnehmen, ohne den
-    Vergleich als abgeschlossen darzustellen."""
+    """Leitet die drei orthogonalen Statusfelder aus dem fachlichen Ausgang,
+    der dokumentartabhaengigen Checkliste und der Radar-Einschaetzung ab.
+    Ein uebernommener Beleg mit fehlenden PRUEFENSWERTEN Angaben behaelt
+    eine offene Pruefaufgabe (pruefen oder als nicht vorhanden bestaetigen),
+    ohne die Uebernahme zu blockieren; fehlende KRITISCHE Angaben fuehren
+    zu Review mit konkreter Ergaenzungsaufgabe."""
     if ausgang == AUSGANG_UEBERNOMMEN:
+        aufgaben = []
+        pruefenswert_offen = fehlende_pruefenswerte(checkliste)
+        if pruefenswert_offen:
+            aufgaben.append(
+                ", ".join(pruefenswert_offen)
+                + ": prüfen oder als 'im Original nicht vorhanden' bestätigen"
+            )
         if radar_einschaetzung == RADAR_VERGLEICH_ERFORDERLICH:
-            return DOKUMENTSTATUS_VORBEREITET, REVIEWSTATUS_OFFEN, "Preisänderung prüfen"
+            aufgaben.append("Preisänderung prüfen")
+        if aufgaben:
+            return DOKUMENTSTATUS_VORBEREITET, REVIEWSTATUS_OFFEN, "; ".join(aufgaben)
         return DOKUMENTSTATUS_VORBEREITET, REVIEWSTATUS_KEINE, None
     if ausgang == AUSGANG_DUBLETTE:
         return DOKUMENTSTATUS_AUSSORTIERT, REVIEWSTATUS_KEINE, None
     if ausgang == AUSGANG_ORIGINAL_ANFORDERN:
         return DOKUMENTSTATUS_ZURUECKGESTELLT, REVIEWSTATUS_OFFEN, "Original anfordern"
     if ausgang == AUSGANG_REVIEW:
-        if fehlende_checkliste:
-            aufgabe = "Fehlende Angaben ergänzen: " + ", ".join(fehlende_checkliste)
+        kritisch_offen = fehlende_kritische(checkliste)
+        if kritisch_offen:
+            aufgabe = "Fehlende Angaben ergänzen: " + ", ".join(kritisch_offen)
         else:
             aufgabe = "Dateiendung und Dateiinhalt widersprechen sich, bitte prüfen."
         return DOKUMENTSTATUS_ZURUECKGESTELLT, REVIEWSTATUS_OFFEN, aufgabe
@@ -386,13 +401,18 @@ def verarbeite_datei(
     checkliste_vollstaendig: bool | None = None
     if plan.werkzeug_aktiv("checkliste"):
         t0 = _jetzt()
-        checkliste = checkliste_pruefen(beleg, text_lesbar=text_lesbar)
+        checkliste = checkliste_pruefen(
+            beleg, text_lesbar=text_lesbar, dokumentart=beleg.dokumentart
+        )
         beleg.checkliste = checkliste
-        checkliste_vollstaendig = all(c.erfuellt for c in checkliste)
+        # Fuer Uebernahme und Radar zaehlt ausschliesslich die kritische
+        # Vollstaendigkeit; pruefenswerte Luecken blockieren nicht.
+        checkliste_vollstaendig = kritisch_vollstaendig(checkliste)
         erfuellt = sum(1 for c in checkliste if c.erfuellt)
         _schritt(
             beleg, "Vollständigkeit geprüft", "ok", "checkliste-fail-closed",
-            f"{erfuellt}/{len(checkliste)} Checklisten-Punkte erfüllt.",
+            f"{erfuellt}/{len(checkliste)} Checklisten-Punkte erfüllt "
+            f"(Dokumentart: {beleg.dokumentart or 'unbestimmt'}).",
             t0, _jetzt(),
         )
     else:
@@ -463,32 +483,32 @@ def verarbeite_datei(
         werkzeugschritt = plan.werkzeuge["radar"]
         _schritt(beleg, "Abovergleich bewertet", "uebersprungen", "keins", werkzeugschritt.begruendung, t0, _jetzt())
 
-    fehlende_checkliste = [c.name for c in checkliste if not c.erfuellt]
     dokumentstatus, reviewstatus, review_aufgabe = _status_ableiten(
-        ausgang, fehlende_checkliste, radar_eintrag.einschaetzung if radar_eintrag else None
+        ausgang, checkliste, radar_eintrag.einschaetzung if radar_eintrag else None
     )
     # Ein Zahlungsbeleg ohne zugehoerige Rechnung (Solo-Upload: es gibt
     # keinen Vorgang, der eine Rechnung enthalten koennte) bekommt nie eine
-    # "Fehlende Angaben ergaenzen"-Aufgabe -- der Nutzer soll keine
+    # "Angaben ergaenzen/pruefen"-Aufgabe -- der Nutzer soll keine
     # Rechnungsdaten erfinden, sondern das fehlende Original beschaffen.
     # Fuer EML-Vorgaenge setzt die Vorgangsregel in verarbeite_eml dieselbe
     # Aufgabe, sobald die Rechnung im Vorgang fehlt.
     if (
         kontext is None
         and beleg.dokumentart == DOKUMENTART_ZAHLUNGSBELEG
-        and ausgang == AUSGANG_REVIEW
+        and ausgang in (AUSGANG_REVIEW, AUSGANG_UEBERNOMMEN)
     ):
+        reviewstatus = REVIEWSTATUS_OFFEN
         review_aufgabe = vorgang_modul.AUFGABE_RECHNUNG_ANFORDERN
     beleg.dokumentstatus = dokumentstatus
     beleg.reviewstatus = reviewstatus
     beleg.review_aufgabe = review_aufgabe
+    # Baseline-Freigabe speist sich aus der zentralen Exportfaehigkeit:
+    # Zahlungsbelege und Abo-Bestaetigungen sind nie exportfaehig und damit
+    # nie Preis-Baseline; kritische Luecken sperren ebenfalls. Eine offene,
+    # nur pruefenswerte Aufgabe blockiert die Baseline nicht.
     beleg.baseline_bestaetigt = (
-        ausgang == AUSGANG_UEBERNOMMEN
-        and reviewstatus == REVIEWSTATUS_KEINE
+        exportregeln.exportfaehig(beleg.dokumentart, ausgang, checkliste)
         and (radar_eintrag is None or radar_eintrag.einschaetzung in (RADAR_NEU, RADAR_STABIL, RADAR_VERAENDERT_EINDEUTIG))
-        # Zahlungsbelege und Abo-Bestaetigungen werden nie Preis-Baseline:
-        # der Abovergleich vergleicht ausschliesslich Rechnungsbetraege.
-        and beleg.dokumentart not in (DOKUMENTART_ZAHLUNGSBELEG, DOKUMENTART_ABO_BESTAETIGUNG)
     )
 
     # 8. Handeln: Entscheidung getroffen
@@ -668,13 +688,18 @@ def verarbeite_eml(
                 )
 
     # 7b. Vorgangsregel: Abo-Bestaetigung ist keine Rechnung. Die generische
-    # "fehlende Rechnungsfelder"-Meldung der Checkliste (Referenz, Datum,
-    # Zeitraum) ist hier fachlich irrefuehrend -- eine Ankuendigung hat
-    # naturgemaess keine Rechnungsnummer. Ersetzt Begruendung und
-    # Review-Aufgabe durch eine Erklaerung, die ausschliesslich die bereits
-    # ermittelte, evidenzbasierte naechste Aktivitaet nutzt.
+    # Checklisten-Meldung ist hier fachlich irrefuehrend -- eine
+    # Ankuendigung hat naturgemaess keine Rechnungsnummer. Ersetzt
+    # Begruendung und Review-Aufgabe durch eine Erklaerung, die
+    # ausschliesslich die bereits ermittelte, evidenzbasierte naechste
+    # Aktivitaet nutzt. Gilt fuer Review- UND uebernommene
+    # Abo-Bestaetigungen: ohne Rechnung bleibt die Aufgabe "Rechnung zum
+    # Zahlungstermin nachverfolgen" offen (exportfaehig ist eine
+    # Abo-Bestaetigung ohnehin nie).
     for beleg in belege:
-        if beleg.dokumentart == DOKUMENTART_ABO_BESTAETIGUNG and beleg.ausgang == AUSGANG_REVIEW:
+        if beleg.dokumentart == DOKUMENTART_ABO_BESTAETIGUNG and beleg.ausgang in (
+            AUSGANG_REVIEW, AUSGANG_UEBERNOMMEN
+        ):
             alt_begruendung = beleg.begruendung
             alt_aufgabe = beleg.review_aufgabe
             neue_begruendung = vorgang_modul.abo_bestaetigung_begruendung(art, status, datum)

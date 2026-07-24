@@ -571,11 +571,15 @@ def alle_belege(conn: sqlite3.Connection) -> list[dict]:
 
 def radar_uebersicht(conn: sqlite3.Connection) -> list[dict]:
     """Aktueller Radar-Zustand je Anbieter: die Einschaetzung des zuletzt
-    uebernommenen Belegs dieses Anbieters (nach Einfuegereihenfolge, nicht
-    nach der nur sekundengenauen erfasst_am-Spalte). Zeigt bewusst auch
-    offene Vergleichsfaelle, damit sie sichtbar bleiben -- nur die
-    Vergleichsbasis fuer den naechsten Preisvergleich folgt der strengeren
-    baseline_bestaetigt-Regel (siehe bestand.letzte_baseline)."""
+    uebernommenen KOSTEN-Belegs dieses Anbieters (nach Einfuegereihenfolge,
+    nicht nach der nur sekundengenauen erfasst_am-Spalte). Das Radar zeigt
+    wirtschaftlich relevante Kosten: Zahlungsbelege und Abo-Bestaetigungen
+    sind nie eine eigene Radar-Karte (sie sind Nachweise bzw.
+    Ankuendigungen, keine Kostenbasis) -- vertreten wird der Anbieter dann
+    von seiner juengsten uebernommenen Rechnung. Offene Vergleichsfaelle
+    bleiben bewusst sichtbar; nur die Vergleichsbasis fuer den naechsten
+    Preisvergleich folgt der strengeren baseline_bestaetigt-Regel (siehe
+    bestand.letzte_baseline)."""
     rows = conn.execute(
         """
         SELECT b.* FROM belege b
@@ -583,6 +587,8 @@ def radar_uebersicht(conn: sqlite3.Connection) -> list[dict]:
             SELECT anbieter_schluessel, MAX(rowid) AS letzte_seq
             FROM belege
             WHERE ausgang = 'uebernommen' AND anbieter_schluessel IS NOT NULL
+              AND (dokumentart IS NULL
+                   OR dokumentart NOT IN ('zahlungsbeleg', 'abo_bestaetigung'))
             GROUP BY anbieter_schluessel
         ) neuste
         ON b.anbieter_schluessel = neuste.anbieter_schluessel AND b.rowid = neuste.letzte_seq

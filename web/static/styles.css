@@ -239,19 +239,60 @@ main { max-width: 1120px; margin: 0 auto; padding: 8px 20px 40px; }
   border-radius: 12px;
   background: var(--glas-karte);
   box-shadow: var(--schatten-karte);
-  cursor: pointer;
   min-width: 0;
-  transition: border-color 0.15s ease, transform 0.15s ease, box-shadow 0.2s ease;
+  transition: border-color 0.15s ease, box-shadow 0.2s ease;
 }
 .beleg:hover {
   border-color: rgba(242, 138, 69, 0.55);
-  transform: translateY(-1px);
   box-shadow: 0 8px 22px rgba(4, 8, 16, 0.38);
 }
 .beleg-zeile1 { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; min-width: 0; }
 .beleg-anbieter { font-weight: 600; overflow-wrap: anywhere; }
 .beleg-meta { color: var(--text-leise); font-size: 0.88rem; overflow-wrap: anywhere; }
-.beleg-begruendung { font-size: 0.9rem; color: var(--text-leise); }
+.beleg-aufgabe { font-size: 0.88rem; color: var(--gelb-text); }
+.beleg-aktionen { display: flex; gap: 8px; margin-top: 4px; flex-wrap: wrap; }
+.btn-klein { padding: 5px 12px; font-size: 0.85rem; border-radius: 8px; }
+/* Original-PDF-Link: orange Markenoptik, aber sichtbar sekundaer zum
+   Hauptstatus (Glasflaeche mit orangefarbener Kante statt Vollflaeche). */
+.btn-pdf {
+  display: inline-block;
+  background: rgba(242, 138, 69, 0.10);
+  color: var(--brand-orange-hell);
+  border: 1px solid rgba(242, 138, 69, 0.45);
+  text-decoration: none;
+  font-weight: 600;
+}
+.btn-pdf:hover { background: rgba(242, 138, 69, 0.20); }
+
+/* Kompakte Duplikat-Zusammenfassung am Listenende */
+.dubletten-kompakt {
+  border: 1px dashed var(--linie);
+  border-radius: 12px;
+  padding: 10px 14px;
+  color: var(--text-leise);
+  font-size: 0.9rem;
+  background: rgba(255, 255, 255, 0.02);
+}
+.dubletten-titel { font-weight: 600; }
+.dubletten-kompakt summary { cursor: pointer; font-size: 0.85rem; margin-top: 4px; }
+.dubletten-kompakt ul {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.dubletten-kompakt li { overflow-wrap: anywhere; }
+.dublette-link {
+  font: inherit;
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--akzent);
+  cursor: pointer;
+  text-decoration: underline;
+}
 .beleg-liste li.review-zuerst { order: -1; }
 /* Dokumente eines E-Mail-Vorgangs bleiben unter ihrem Gruppenkopf stehen,
    auch wenn eines davon eine offene Pruefung hat. */
@@ -416,6 +457,7 @@ main { max-width: 1120px; margin: 0 auto; padding: 8px 20px 40px; }
   background: linear-gradient(150deg, rgba(242, 138, 69, 0.10), rgba(242, 138, 69, 0.02));
 }
 .detail-status h4 { margin: 0 0 6px; }
+.detail-aktionen { margin-top: 10px; }
 
 .detail-spalten { display: grid; grid-template-columns: 1fr; gap: 16px; margin-top: 16px; }
 @media (min-width: 600px) { .detail-spalten { grid-template-columns: 1fr 1fr; } }
@@ -429,11 +471,24 @@ main { max-width: 1120px; margin: 0 auto; padding: 8px 20px 40px; }
 }
 .detail-quelle h4:first-child, .detail-felder h4:first-child { margin-top: 0; }
 
-/* Technikteil: vollstaendig sichtbar, aber sichtbar sekundaer abgesetzt */
-.detail-technik {
+/* Technikteil: vollstaendig erreichbar (Jury-Nachweis), aber standardmaessig
+   eingeklappt hinter "Technische Agentendetails" -- die normale Ansicht
+   bleibt kompakt. */
+.technik-details {
   margin-top: 18px;
-  padding-top: 12px;
+  padding-top: 10px;
   border-top: 1px solid var(--linie);
+}
+.technik-details > summary {
+  cursor: pointer;
+  font-size: 0.82rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--text-leise);
+}
+.detail-technik {
+  margin-top: 8px;
   font-size: 0.92em;
 }
 .detail-technik h4:first-child { margin-top: 0; }
@@ -502,6 +557,32 @@ main { max-width: 1120px; margin: 0 auto; padding: 8px 20px 40px; }
   padding: 0 20px 30px;
   color: var(--text-leise);
   font-size: 0.82rem;
+}
+
+/* ---- Scrollbars (Markenoptik, nie versteckt) ----
+   Detailmodal und lange interne Bereiche: schmale Spur, transparenter
+   Hintergrund, gedaempfter orangefarbener, abgerundeter Griff. Tastatur-,
+   Maus- und Touchscrollen bleiben unveraendert. */
+.detail,
+.quelle-vorschau {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(242, 138, 69, 0.5) transparent;
+}
+.detail::-webkit-scrollbar,
+.quelle-vorschau::-webkit-scrollbar { width: 10px; height: 10px; }
+.detail::-webkit-scrollbar-track,
+.quelle-vorschau::-webkit-scrollbar-track { background: transparent; }
+.detail::-webkit-scrollbar-thumb,
+.quelle-vorschau::-webkit-scrollbar-thumb {
+  background: rgba(242, 138, 69, 0.45);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+.detail::-webkit-scrollbar-thumb:hover,
+.quelle-vorschau::-webkit-scrollbar-thumb:hover {
+  background: rgba(242, 138, 69, 0.65);
+  background-clip: padding-box;
 }
 
 /* ---- Fokus und Bewegung ---- */

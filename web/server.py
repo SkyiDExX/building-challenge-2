@@ -23,7 +23,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
-from belegwaechter import agent, speicher, steuerzeichen  # noqa: E402
+from belegwaechter import agent, dateinamen, speicher, steuerzeichen  # noqa: E402
 from belegwaechter.fehlertexte import bereinigen  # noqa: E402
 
 HOST = "127.0.0.1"
@@ -50,6 +50,18 @@ _ASSET_CONTENT_TYPES = {
 # zaehlt als Kostenzeile. Ein Zahlungsbeleg oder eine Abo-Bestaetigung
 # duerfen die Kosten nie ein zweites Mal aufsummieren.
 _CSV_EXPORTIERBARE_DOKUMENTARTEN = {"rechnung", "sonstiger_kostennachweis"}
+
+# Benutzerfreundliche Anzeige des Quellenstatus in der Kosten-CSV statt des
+# internen Slugs; unbekannte Werte fallen unveraendert durch.
+_QUELLENSTATUS_ANZEIGE = {
+    "original_vorhanden": "Original vorhanden",
+    "erfassungsnachweis": "Erfassungsnachweis",
+    "hinweis": "Hinweis, kein Beleg",
+}
+
+# Original-PDF-Route: die Beleg-ID ist der einzige Client-Input; sie wird
+# nur als DB-Schluessel verwendet, nie als Pfadbestandteil.
+_BELEG_ORIGINAL_MUSTER = re.compile(r"^/api/belege/([A-Za-z0-9-]{1,64})/original$")
 
 MAX_ANFRAGE_BYTES = 20 * 1024 * 1024  # gesamte HTTP-Anfrage
 MAX_DATEI_BYTES = 10 * 1024 * 1024  # einzelne Datei
@@ -257,6 +269,46 @@ class BelegwaechterHandler(BaseHTTPRequestHandler):
             return
         self._datei(kandidat, content_type)
 
+    def _beleg_original(self, beleg_id: str) -> None:
+        """Liefert das gespeicherte Original-PDF eines Belegs. Der Beleg wird
+        ausschliesslich ueber seine Datenbank-ID geladen; der interne
+        storage_key stammt nie aus der URL und wird nur ueber
+        speicher.pfad_aus_key() aufgeloest. Jede Abweichung (unbekannte ID,
+        kein PDF, fehlende Datei, widerspruechliche Magic Bytes) endet in
+        einem wertfreien 404 ohne Pfadangaben."""
+        nicht_gefunden = {"fehler": "nicht gefunden"}
+        conn = speicher.verbindung()
+        row = conn.execute(
+            "SELECT dateiname, speichername, dateityp, storage_key FROM belege WHERE id = ?",
+            (beleg_id,),
+        ).fetchone()
+        conn.close()
+        if row is None or row["dateityp"] != "PDF" or not row["storage_key"]:
+            self._json(404, nicht_gefunden)
+            return
+        try:
+            pfad = speicher.pfad_aus_key(row["storage_key"])
+            inhalt = pfad.read_bytes()
+        except (dateinamen.UnsichererPfadFehler, OSError):
+            self._json(404, nicht_gefunden)
+            return
+        if not inhalt.startswith(b"%PDF-"):
+            self._json(404, nicht_gefunden)
+            return
+        # speichername() ist eine harte ASCII-Whitelist -- header-sicher und
+        # ohne Pfadbestandteile.
+        anzeigename = dateinamen.speichername(row["speichername"] or row["dateiname"] or "beleg.pdf")
+        if not anzeigename.lower().endswith(".pdf"):
+            anzeigename += ".pdf"
+        self.send_response(200)
+        self.send_header("Content-Type", "application/pdf")
+        self.send_header("Content-Disposition", f'inline; filename="{anzeigename}"')
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Length", str(len(inhalt)))
+        self.end_headers()
+        self.wfile.write(inhalt)
+
     def do_GET(self) -> None:  # noqa: N802
         if self.path == "/" or self.path == "/index.html":
             self._datei(STATIC_DIR / "index.html", "text/html; charset=utf-8")
@@ -266,6 +318,16 @@ class BelegwaechterHandler(BaseHTTPRequestHandler):
             self._datei(STATIC_DIR / "app.js", "application/javascript; charset=utf-8")
         elif self.path.startswith("/assets/"):
             self._asset_datei()
+        elif self.path.startswith("/api/belege/"):
+            treffer = _BELEG_ORIGINAL_MUSTER.match(self.path)
+            if treffer is None:
+                self._json(404, {"fehler": "nicht gefunden"})
+                return
+            erlaubt, code, fehler = _zugriff_erlaubt(self, veraendernd=False)
+            if not erlaubt:
+                self._json(code, fehler)
+                return
+            self._beleg_original(treffer.group(1))
         elif self.path == "/api/ergebnis":
             erlaubt, code, fehler = _zugriff_erlaubt(self, veraendernd=False)
             if not erlaubt:
@@ -335,7 +397,7 @@ class BelegwaechterHandler(BaseHTTPRequestHandler):
                         _csv_text(b["waehrung"]),
                         _csv_text(b["zeitraum"]),
                         _csv_text(b["referenz"]),
-                        _csv_text(b["quellenstatus"]),
+                        _csv_text(_QUELLENSTATUS_ANZEIGE.get(b["quellenstatus"], b["quellenstatus"])),
                         _csv_text(b["dateiname"]),
                     ]
                 )

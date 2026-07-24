@@ -88,9 +88,12 @@
       <button id="detail-schliessen" class="schliessen-btn" type="button" aria-label="Schließen" title="Schließen"><img src="/assets/brand/optitax-close-x-32.png" width="28" height="28" alt=""></button>
     </div>
     <div class="detail-status">
-      <h4>Entscheidung des Agenten</h4>
+      <h4>Ergebnis</h4>
       <p id="detail-entscheidung" class="entscheidung"></p>
       <p id="detail-review-hinweis" class="review-hinweis" hidden></p>
+      <div class="detail-aktionen">
+        <a id="detail-pdf-btn" class="btn btn-pdf" target="_blank" rel="noopener" hidden>Original-PDF öffnen</a>
+      </div>
     </div>
     <div class="detail-spalten">
       <div class="detail-quelle">
@@ -104,14 +107,17 @@
         <ul id="detail-checkliste"></ul>
       </div>
     </div>
-    <div class="detail-technik">
-      <h4>Plan des Agenten</h4>
-      <div id="detail-plan"></div>
-      <details class="schritte-details">
-        <summary>Agentenschritte</summary>
-        <ul id="detail-schritte" class="audit-liste"></ul>
-      </details>
-    </div>
+    <details id="technik-details" class="technik-details">
+      <summary>Technische Agentendetails</summary>
+      <div class="detail-technik">
+        <h4>Plan des Agenten</h4>
+        <div id="detail-plan"></div>
+        <details class="schritte-details">
+          <summary>Agentenschritte</summary>
+          <ul id="detail-schritte" class="audit-liste"></ul>
+        </details>
+      </div>
+    </details>
   </div>
 </div>
 

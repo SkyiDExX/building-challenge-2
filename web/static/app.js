@@ -27,10 +27,6 @@ const RADAR_LABEL = {
   beleg_fehlt: ["Beleg fehlt", "badge-dublette"],
 };
 
-const REVIEWSTATUS_LABEL = {
-  offen: ["Prüfung offen", "badge-review"],
-};
-
 const DOKUMENTART_LABEL = {
   rechnung: "Rechnung",
   zahlungsbeleg: "Zahlungsbeleg",
@@ -84,6 +80,75 @@ async function ladeAlles() {
   renderAudit(audit.audit);
 }
 
+function pdfOriginalLink(b, klassen) {
+  const link = document.createElement("a");
+  link.className = klassen;
+  link.href = `/api/belege/${encodeURIComponent(b.id)}/original`;
+  link.target = "_blank";
+  link.rel = "noopener";
+  link.textContent = "Original-PDF";
+  link.setAttribute(
+    "aria-label",
+    `Original-PDF von ${b.felder.anbieter.wert || b.dateiname} in neuem Tab öffnen`
+  );
+  return link;
+}
+
+function belegKarte(b) {
+  // Kompakte Karte: Titel, Betrag/Datum, Dokumentart, Status, offene
+  // Aufgabe und Aktionen. Der vollstaendige Entscheidungstext, Dateiname
+  // und Technikdetails stehen in der Detailansicht.
+  const karte = document.createElement("div");
+  karte.className = "beleg";
+  const titel = b.felder.anbieter.wert || b.dateiname;
+  const [label, klasse] = AUSGANG_LABEL[b.ausgang] || [b.ausgang, "badge-quelle"];
+
+  const z1 = document.createElement("div");
+  z1.className = "beleg-zeile1";
+  const name = document.createElement("span");
+  name.className = "beleg-anbieter";
+  name.textContent = titel;
+  z1.appendChild(name);
+  const metaTeile = [];
+  if (b.felder.betrag.wert) {
+    metaTeile.push(`${b.felder.betrag.wert} ${b.felder.waehrung.wert || ""}`.trim());
+  }
+  if (b.felder.datum.wert) metaTeile.push(b.felder.datum.wert);
+  if (metaTeile.length > 0) {
+    const meta = document.createElement("span");
+    meta.className = "beleg-meta";
+    meta.textContent = metaTeile.join(" · ");
+    z1.appendChild(meta);
+  }
+  z1.appendChild(badge(label, klasse));
+  if (b.dokumentart && DOKUMENTART_LABEL[b.dokumentart]) {
+    z1.appendChild(badge(DOKUMENTART_LABEL[b.dokumentart], "badge-quelle"));
+  }
+  karte.appendChild(z1);
+
+  if (b.reviewstatus === "offen" && b.review_aufgabe) {
+    const aufgabe = document.createElement("div");
+    aufgabe.className = "beleg-aufgabe";
+    aufgabe.textContent = `Nächster Schritt: ${b.review_aufgabe}`;
+    karte.appendChild(aufgabe);
+  }
+
+  const aktionen = document.createElement("div");
+  aktionen.className = "beleg-aktionen";
+  const detailsBtn = document.createElement("button");
+  detailsBtn.type = "button";
+  detailsBtn.className = "btn btn-sekundaer btn-klein";
+  detailsBtn.textContent = "Details";
+  detailsBtn.setAttribute("aria-label", `Details zu ${titel} öffnen (Status: ${label})`);
+  detailsBtn.addEventListener("click", () => detailOeffnen(b));
+  aktionen.appendChild(detailsBtn);
+  if (b.dateityp === "PDF") {
+    aktionen.appendChild(pdfOriginalLink(b, "btn btn-pdf btn-klein"));
+  }
+  karte.appendChild(aktionen);
+  return karte;
+}
+
 function renderBelege(belege) {
   const liste = $("beleg-liste");
   liste.textContent = "";
@@ -103,7 +168,13 @@ function renderBelege(belege) {
   letzteVorgaenge.forEach((v) => { vorgangJeId[v.id] = v; });
   const gezeigteVorgaenge = new Set();
 
-  belege.forEach((b) => {
+  // Aussortierte Duplikate erscheinen nicht als eigene grosse Karte,
+  // sondern kompakt zusammengefasst am Listenende. Datenbank, Audit und
+  // Detailansicht behalten den vollstaendigen Nachweis.
+  const dubletten = belege.filter((b) => b.ausgang === "dublette");
+  const sichtbare = belege.filter((b) => b.ausgang !== "dublette");
+
+  sichtbare.forEach((b) => {
     // Gruppenkopf: alle Dokumente eines E-Mail-Vorgangs stehen zusammen,
     // mit Betreff, Absender und der naechsten Aktivitaet (nur mit Evidenz).
     if (b.vorgang_id && vorgangJeId[b.vorgang_id] && !gezeigteVorgaenge.has(b.vorgang_id)) {
@@ -135,44 +206,41 @@ function renderBelege(belege) {
     if (b.ausgang === "review" || b.ausgang === "original_anfordern" || b.ausgang === "fehlgeschlagen") {
       li.classList.add("review-zuerst");
     }
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.className = "beleg";
-    const [label, klasse] = AUSGANG_LABEL[b.ausgang] || [b.ausgang, "badge-quelle"];
-    btn.setAttribute("aria-label", `${b.felder.anbieter.wert || b.dateiname}, Status: ${label}. Details öffnen.`);
-
-    const z1 = document.createElement("div");
-    z1.className = "beleg-zeile1";
-    const name = document.createElement("span");
-    name.className = "beleg-anbieter";
-    name.textContent = b.felder.anbieter.wert || b.dateiname;
-    const meta = document.createElement("span");
-    meta.className = "beleg-meta";
-    const betragTeil = b.felder.betrag.wert ? `${b.felder.betrag.wert} ${b.felder.waehrung.wert || ""} · ` : "";
-    const datumTeil = b.felder.datum.wert ? `${b.felder.datum.wert} · ` : "";
-    meta.textContent = `${betragTeil}${datumTeil}${b.dateiname}`;
-    z1.append(name, meta, badge(label, klasse));
-    if (b.dokumentart && DOKUMENTART_LABEL[b.dokumentart]) {
-      z1.appendChild(badge(DOKUMENTART_LABEL[b.dokumentart], "badge-quelle"));
-    }
-    z1.appendChild(badge(QUELLE_LABEL[b.quellenstatus] || b.quellenstatus, "badge-quelle"));
-    if (b.reviewstatus === "offen" && REVIEWSTATUS_LABEL[b.reviewstatus]) {
-      const [reviewLabel, reviewKlasse] = REVIEWSTATUS_LABEL[b.reviewstatus];
-      z1.appendChild(badge(reviewLabel, reviewKlasse));
-    }
-
-    const beg = document.createElement("div");
-    beg.className = "beleg-begruendung";
-    beg.textContent =
-      b.ausgang === "uebernommen" && b.reviewstatus === "offen"
-        ? "Beleg vorbereitet. Preisvergleich benötigt Prüfung."
-        : b.begruendung;
-
-    btn.append(z1, beg);
-    btn.addEventListener("click", () => detailOeffnen(b));
-    li.appendChild(btn);
+    li.appendChild(belegKarte(b));
     liste.appendChild(li);
   });
+
+  if (dubletten.length > 0) {
+    const li = document.createElement("li");
+    li.className = "dubletten-kompakt";
+    const kopf = document.createElement("div");
+    kopf.className = "dubletten-titel";
+    kopf.textContent =
+      dubletten.length === 1
+        ? "1 Duplikat erkannt und aussortiert"
+        : `${dubletten.length} Duplikate erkannt und aussortiert`;
+    li.appendChild(kopf);
+    const details = document.createElement("details");
+    const summary = document.createElement("summary");
+    summary.textContent = "Aussortierte Duplikate anzeigen";
+    details.appendChild(summary);
+    const ul = document.createElement("ul");
+    dubletten.forEach((b) => {
+      const zeile = document.createElement("li");
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "dublette-link";
+      btn.textContent = b.dateiname;
+      btn.setAttribute("aria-label", `Details zum aussortierten Duplikat ${b.dateiname} öffnen`);
+      btn.addEventListener("click", () => detailOeffnen(b));
+      zeile.appendChild(btn);
+      zeile.appendChild(document.createTextNode(` — ${b.begruendung}`));
+      ul.appendChild(zeile);
+    });
+    details.appendChild(ul);
+    li.appendChild(details);
+    liste.appendChild(li);
+  }
 }
 
 function renderRadar(radar) {
@@ -288,11 +356,20 @@ function detailOeffnen(b) {
   $("detail-entscheidung").textContent = b.begruendung;
 
   const reviewHinweis = $("detail-review-hinweis");
-  if (b.ausgang === "uebernommen" && b.reviewstatus === "offen") {
-    reviewHinweis.textContent = `Beleg vorbereitet. Preisvergleich benötigt Prüfung: ${b.review_aufgabe || "Preisänderung prüfen"}.`;
+  if (b.reviewstatus === "offen") {
+    reviewHinweis.textContent = `Nächste Aktion: ${b.review_aufgabe || "Beleg prüfen"}.`;
     reviewHinweis.hidden = false;
   } else {
     reviewHinweis.hidden = true;
+  }
+
+  const pdfBtn = $("detail-pdf-btn");
+  if (b.dateityp === "PDF") {
+    pdfBtn.href = `/api/belege/${encodeURIComponent(b.id)}/original`;
+    pdfBtn.hidden = false;
+  } else {
+    pdfBtn.removeAttribute("href");
+    pdfBtn.hidden = true;
   }
 
   const planContainer = $("detail-plan");
@@ -341,6 +418,9 @@ function detailOeffnen(b) {
     li.appendChild(document.createTextNode(`${s.schritt} [${s.status}, ${s.werkzeug}]: ${s.begruendung}`));
     schritteListe.appendChild(li);
   });
+
+  // Technikbereich startet bei jedem Oeffnen eingeklappt.
+  $("technik-details").open = false;
 
   $("detail-overlay").hidden = false;
   $("detail-schliessen").focus();

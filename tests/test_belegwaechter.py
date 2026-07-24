@@ -1623,20 +1623,27 @@ class DetailSchritteEingeklapptTest(unittest.TestCase):
 
 
 class RadarLeereElementeTest(IsolierteDatenbankTestCase):
-    """Regressionsschutz: Ist der Abovergleich fuer den juengsten Beleg eines
-    Anbieters bewusst deaktiviert (z.B. weil er ein Zahlungsbeleg ist), darf
-    das Abo-Radar keinen leeren Badge und keine leere Begruendungsflaeche
-    rendern -- der Radarstatus wird nie erfunden."""
+    """Das Abo-Radar zeigt wirtschaftlich relevante Kosten: Zahlungsbelege
+    und Abo-Bestaetigungen sind nie eine eigene Radar-Karte; der Anbieter
+    wird von seiner juengsten uebernommenen Rechnung vertreten. Ein
+    Radarstatus wird nie erfunden."""
 
-    def test_juengster_beleg_ohne_radar_einschaetzung_liefert_null_statt_erfundenem_wert(self):
+    def test_zahlungsbeleg_ist_keine_radar_karte_rechnung_vertritt_anbieter(self):
         agent.verarbeite_eml(
             self.conn, speicher.neuer_lauf(self.conn),
             "cloudbasis_rechnung_und_zahlung.eml", _lesen("cloudbasis_rechnung_und_zahlung.eml"),
         )
         radar = speicher.radar_uebersicht(self.conn)
-        self.assertEqual(len(radar), 1)
-        self.assertIsNone(radar[0]["radar_einschaetzung"], "Kein erfundener Radarstatus fuer einen Zahlungsbeleg")
-        self.assertIsNone(radar[0]["radar_begruendung"])
+        self.assertGreaterEqual(len(radar), 1)
+        for eintrag in radar:
+            self.assertNotIn(
+                eintrag["dokumentart"], ("zahlungsbeleg", "abo_bestaetigung"),
+                "Zahlungsbelege und Abo-Bestätigungen sind nie eine eigene Radar-Karte",
+            )
+            self.assertIsNotNone(
+                eintrag["radar_einschaetzung"],
+                "Jede Radar-Karte braucht eine echte, nicht erfundene Einschätzung",
+            )
 
     def test_app_js_rendert_badge_und_begruendung_nur_bei_vorhandenem_wert(self):
         js = (REPO_ROOT / "web" / "static" / "app.js").read_text(encoding="utf-8")
@@ -2196,6 +2203,171 @@ class RechnungVsAboTest(unittest.TestCase):
             "Zahlung erhalten\nRechnungsnummer: RE-1\nIhr Abo verlängert sich."
         )
         self.assertEqual(art, "zahlungsbeleg")
+
+
+class RadarBereinigungTest(IsolierteDatenbankTestCase):
+    """Radar-Filter auf Speicherebene: Zahlungsbelege und Abo-Bestaetigungen
+    erscheinen nie als eigene Radar-Karte; die juengste uebernommene
+    Rechnung des Anbieters vertritt ihn. Datenbankinhalte, Audit und
+    Agentenergebnisse bleiben unveraendert."""
+
+    def _beleg_einfuegen(self, beleg_id: str, anbieter: str, dokumentart: str,
+                         einschaetzung: str | None) -> None:
+        self.conn.execute(
+            """
+            INSERT INTO belege (
+                id, lauf_id, dateiname, dateihash, dateipfad, dateityp, stufe,
+                quellenstatus, anbieter, anbieter_schluessel, felder_json,
+                checkliste_json, ausgang, begruendung, radar_einschaetzung,
+                dokumentstatus, reviewstatus, baseline_bestaetigt,
+                dokumentart, erfasst_am
+            ) VALUES (?, 'lauf-radar', ?, ?, '', 'PDF', 'A',
+                'original_vorhanden', ?, ?, '{}', '[]', 'uebernommen',
+                'Test.', ?, 'vorbereitet', 'keine', 1, ?, datetime('now'))
+            """,
+            (beleg_id, f"{beleg_id}.pdf", f"hash-{beleg_id}", anbieter,
+             anbieter.lower(), einschaetzung, dokumentart),
+        )
+        self.conn.commit()
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.conn.execute(
+            "INSERT INTO laeufe (id, gestartet_am) VALUES ('lauf-radar', datetime('now'))"
+        )
+        self.conn.commit()
+
+    def test_rechnung_vertritt_anbieter_trotz_neuerem_zahlungsbeleg(self):
+        self._beleg_einfuegen("r1", "Beispiel AG", "rechnung", "neu")
+        self._beleg_einfuegen("z1", "Beispiel AG", "zahlungsbeleg", None)
+        radar = speicher.radar_uebersicht(self.conn)
+        self.assertEqual(len(radar), 1)
+        self.assertEqual(radar[0]["id"], "r1")
+        self.assertEqual(radar[0]["radar_einschaetzung"], "neu")
+
+    def test_abo_bestaetigung_ohne_rechnung_ist_keine_radar_karte(self):
+        self._beleg_einfuegen("a1", "Nur Abo GmbH", "abo_bestaetigung", None)
+        self.assertEqual(speicher.radar_uebersicht(self.conn), [])
+
+    def test_datenbankzeilen_bleiben_unveraendert(self):
+        self._beleg_einfuegen("r1", "Beispiel AG", "rechnung", "neu")
+        self._beleg_einfuegen("z1", "Beispiel AG", "zahlungsbeleg", None)
+        speicher.radar_uebersicht(self.conn)
+        anzahl = self.conn.execute("SELECT COUNT(*) FROM belege").fetchone()[0]
+        self.assertEqual(anzahl, 2, "Der Radar-Filter ist reine Anzeige, keine Datenaenderung")
+
+
+class OriginalPdfRouteTest(HttpTestCase):
+    """GET /api/belege/<id>/original liefert das gespeicherte Original-PDF
+    sicher aus: Beleg nur per Datenbank-ID, nie per Pfad; nur echte PDFs;
+    wertfreie 404; keine Pfadangaben in Antwort oder Headern."""
+
+    def _beleg_id(self) -> str:
+        status, body = self._senden("GET", "/api/ergebnis", host=f"127.0.0.1:{self.port}")
+        self.assertEqual(status, 200)
+        return json.loads(body)["belege"][0]["id"]
+
+    def _original_holen(self, beleg_id: str) -> tuple[int, bytes, dict]:
+        conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=10)
+        conn.request("GET", f"/api/belege/{beleg_id}/original")
+        resp = conn.getresponse()
+        daten = resp.read()
+        headers = dict(resp.getheaders())
+        conn.close()
+        return resp.status, daten, headers
+
+    def test_gueltige_id_liefert_pdf_mit_sicherheitsheadern(self):
+        self._upload_ok([("cloudbasis_juli.pdf", _lesen("cloudbasis_juli.pdf"))])
+        status, daten, headers = self._original_holen(self._beleg_id())
+        self.assertEqual(status, 200)
+        self.assertTrue(daten.startswith(b"%PDF"), "Antwort muss mit %PDF beginnen")
+        self.assertEqual(headers.get("Content-Type"), "application/pdf")
+        self.assertEqual(headers.get("X-Content-Type-Options"), "nosniff")
+        self.assertEqual(headers.get("Cache-Control"), "no-store")
+        disposition = headers.get("Content-Disposition", "")
+        self.assertTrue(disposition.startswith("inline"))
+        for wert in headers.values():
+            self.assertNotRegex(wert, r"[A-Za-z]:[\\/]", "Keine absoluten Pfade in Headern")
+            self.assertNotIn("runtime", wert)
+            self.assertNotIn("eingang", wert)
+
+    def test_unbekannte_id_liefert_wertfreie_404(self):
+        status, daten, _ = self._original_holen("00000000-0000-0000-0000-000000000000")
+        self.assertEqual(status, 404)
+        self.assertEqual(json.loads(daten), {"fehler": "nicht gefunden"})
+
+    def test_nicht_pdf_liefert_404(self):
+        self._upload_ok([("mobiltel_screenshot.png", _lesen("mobiltel_screenshot.png"))])
+        status, daten, _ = self._original_holen(self._beleg_id())
+        self.assertEqual(status, 404)
+        self.assertEqual(json.loads(daten), {"fehler": "nicht gefunden"})
+
+    def test_pfadartige_ids_liefern_404(self):
+        for kaputt in ("..", "a.b", "x_y", "%2e%2e%2fserver.py"):
+            status, _, _ = self._original_holen(kaputt)
+            self.assertEqual(status, 404, f"ID {kaputt!r} muss wertfrei abgelehnt werden")
+
+
+class CsvAnzeigeTest(HttpTestCase):
+    """Die Kosten-CSV zeigt den Quellenstatus benutzerfreundlich statt als
+    internen Slug."""
+
+    def test_quellenstatus_ist_benutzerfreundlich(self):
+        self._upload_ok([("cloudbasis_juli.pdf", _lesen("cloudbasis_juli.pdf"))])
+        status, daten = self._senden("GET", "/api/export.csv", host=f"127.0.0.1:{self.port}")
+        self.assertEqual(status, 200)
+        text = daten.decode("utf-8-sig")
+        self.assertIn("Original vorhanden", text)
+        self.assertNotIn("original_vorhanden", text)
+
+
+class ReviewUiTest(unittest.TestCase):
+    """Vereinfachte Oberflaeche: kompakte Belegkarten, eingeklappte
+    Technikdetails, sicherer Original-PDF-Zugang, kompakte Duplikate,
+    Marken-Scrollbar."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.html = (REPO_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
+        cls.js = (REPO_ROOT / "web" / "static" / "app.js").read_text(encoding="utf-8")
+        cls.css = (REPO_ROOT / "web" / "static" / "styles.css").read_text(encoding="utf-8")
+
+    def test_detail_pdf_button_vorhanden_und_sicher(self):
+        treffer = re.search(r'<a id="detail-pdf-btn"[^>]*>', self.html)
+        self.assertIsNotNone(treffer)
+        self.assertIn('target="_blank"', treffer.group(0))
+        self.assertIn('rel="noopener"', treffer.group(0))
+        self.assertIn("hidden", treffer.group(0))
+
+    def test_technische_agentendetails_standardmaessig_eingeklappt(self):
+        treffer = re.search(r'<details id="technik-details"[^>]*>', self.html)
+        self.assertIsNotNone(treffer)
+        self.assertNotIn(" open", treffer.group(0))
+        self.assertIn("<summary>Technische Agentendetails</summary>", self.html)
+        self.assertIn('$("technik-details").open = false;', self.js)
+
+    def test_pdf_zugang_nur_fuer_pdf_belege(self):
+        self.assertIn('b.dateityp === "PDF"', self.js)
+        self.assertIn("/api/belege/", self.js)
+        self.assertIn('rel = "noopener"', self.js)
+
+    def test_karten_zeigen_keinen_entscheidungstext_mehr(self):
+        self.assertNotIn("beleg-begruendung", self.js)
+        self.assertNotIn("beleg-begruendung", self.css)
+        self.assertIn("beleg-aufgabe", self.js, "Offene Review-Aufgaben bleiben auf der Karte sichtbar")
+
+    def test_duplikate_werden_kompakt_zusammengefasst(self):
+        self.assertIn("Duplikate erkannt und aussortiert", self.js)
+        self.assertIn('b.ausgang === "dublette"', self.js)
+        self.assertIn("dubletten-kompakt", self.css)
+
+    def test_scrollbar_in_markenoptik_nicht_versteckt(self):
+        self.assertIn("scrollbar-width: thin", self.css)
+        self.assertIn("scrollbar-color", self.css)
+        self.assertIn("::-webkit-scrollbar-thumb", self.css)
+        self.assertNotIn("scrollbar-width: none", self.css)
+        for block in re.findall(r"::-webkit-scrollbar[^{]*\{([^}]*)\}", self.css):
+            self.assertNotIn("display: none", block, "Scrollbars dürfen nicht versteckt werden")
 
 
 if __name__ == "__main__":

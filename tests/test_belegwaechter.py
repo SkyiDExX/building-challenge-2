@@ -1786,7 +1786,10 @@ class Migration3Test(unittest.TestCase):
         self._v2_db_bauen()
 
         conn = speicher.verbindung()
-        self.assertEqual(conn.execute("SELECT version FROM schema_version").fetchone()[0], 3)
+        self.assertEqual(
+            conn.execute("SELECT version FROM schema_version").fetchone()[0],
+            len(speicher.MIGRATIONEN),
+        )
 
         beleg = conn.execute("SELECT * FROM belege WHERE id = 'beleg-v2'").fetchone()
         self.assertEqual(beleg["dokumentart"], "unbestimmt", "Backfill darf nie eine Dokumentart raten")
@@ -2854,6 +2857,277 @@ class DatumsbereichTest(unittest.TestCase):
             "Über den Jahreswechsel wird kein Jahr geraten",
         )
         self.assertEqual(datumformat.zeitraum_ui("monatlich"), "monatlich")
+
+
+class MigrationV4Test(IsolierteDatenbankTestCase):
+    def test_korrekturtabelle_wird_angelegt(self):
+        tabelle = self.conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='beleg_korrekturen'"
+        ).fetchone()
+        self.assertIsNotNone(tabelle, "Migration 4 muss beleg_korrekturen anlegen")
+
+
+class KorrekturWorkflowTest(HttpTestCase):
+    """Manuelle Korrekturen Ende-zu-Ende: append-only Historie, erneute
+    Agentenbewertung ohne neuen Beleg, effektive Werte identisch in API,
+    Radar und CSV, zentrale Exportfaehigkeit."""
+
+    def _post_json(self, pfad: str, payload: dict) -> tuple[int, bytes]:
+        body = json.dumps(payload).encode("utf-8")
+        return self._senden(
+            "POST", pfad, body=body,
+            extra_headers={"Content-Type": "application/json"},
+            host=f"127.0.0.1:{self.port}",
+        )
+
+    def _erster_beleg(self) -> dict:
+        status, body = self._senden("GET", "/api/ergebnis", host=f"127.0.0.1:{self.port}")
+        self.assertEqual(status, 200)
+        return json.loads(body)["belege"][0]
+
+    def _csv_zeilen(self) -> list[str]:
+        status, daten = self._senden("GET", "/api/export.csv", host=f"127.0.0.1:{self.port}")
+        self.assertEqual(status, 200)
+        zeilen = [z for z in daten.decode("utf-8-sig").splitlines() if z.strip()]
+        return zeilen[1:]
+
+    def _rechnung_ohne_betrag_hochladen(self) -> str:
+        inhalt = _synthetische_rechnung(
+            [
+                "Beispiel Dienste AG", "Rechnung Nr. RE-500", "Datum: 01.08.2026",
+                "Leistungszeitraum: monatlich", "Tarif: Standard",
+            ]
+        )
+        self._upload_ok([("ohne_betrag.pdf", inhalt)])
+        return self._erster_beleg()["id"]
+
+    def test_kritische_ergaenzung_macht_beleg_exportfaehig(self):
+        beleg_id = self._rechnung_ohne_betrag_hochladen()
+        beleg = self._erster_beleg()
+        self.assertEqual(beleg["ausgang"], "review")
+        self.assertFalse(beleg["exportbereit"])
+        self.assertEqual(self._csv_zeilen(), [])
+
+        status, body = self._post_json(
+            f"/api/belege/{beleg_id}/korrekturen",
+            {"felder": {
+                "betrag": {"aktion": "setzen", "wert": "23,00"},
+                "waehrung": {"aktion": "setzen", "wert": "eur"},
+            }},
+        )
+        self.assertEqual(status, 200)
+        antwort = json.loads(body)["beleg"]
+        self.assertEqual(antwort["ausgang"], "uebernommen")
+        self.assertTrue(antwort["exportbereit"])
+        self.assertEqual(antwort["felder"]["betrag"]["wert"], "23,00")
+        self.assertEqual(antwort["felder"]["betrag"]["herkunft"], "manuell ergänzt")
+        self.assertEqual(antwort["felder"]["waehrung"]["wert"], "EUR")
+        self.assertEqual(antwort["korrekturversion"], 2)
+
+        # Kein neuer Beleg, keine Selbst-Dublette, gleicher effektiver Wert
+        # in UI/API, CSV und Radar.
+        status, body = self._senden("GET", "/api/ergebnis", host=f"127.0.0.1:{self.port}")
+        belege = json.loads(body)["belege"]
+        self.assertEqual(len(belege), 1)
+        self.assertEqual(belege[0]["ausgang"], "uebernommen")
+        zeilen = self._csv_zeilen()
+        self.assertEqual(len(zeilen), 1)
+        self.assertIn("23.00", zeilen[0])
+        self.assertIn("Beispiel Dienste AG", zeilen[0])
+        status, radar_body = self._senden("GET", "/api/radar", host=f"127.0.0.1:{self.port}")
+        radar = json.loads(radar_body)["radar"]
+        self.assertEqual(len(radar), 1)
+        self.assertEqual(radar[0]["anbieter"], "Beispiel Dienste AG")
+        self.assertEqual(radar[0]["betrag"], "23,00")
+
+        status, audit_body = self._senden("GET", "/api/audit", host=f"127.0.0.1:{self.port}")
+        audit_text = audit_body.decode("utf-8")
+        self.assertIn("Angaben manuell ergänzt", audit_text)
+        self.assertIn("Beleg erneut geprüft", audit_text)
+
+    def test_kritisches_nicht_vorhanden_bleibt_review_und_nicht_exportfaehig(self):
+        beleg_id = self._rechnung_ohne_betrag_hochladen()
+        status, body = self._post_json(
+            f"/api/belege/{beleg_id}/korrekturen",
+            {"felder": {"betrag": {"aktion": "nicht_vorhanden"}}},
+        )
+        self.assertEqual(status, 200)
+        antwort = json.loads(body)["beleg"]
+        self.assertEqual(antwort["ausgang"], "review",
+                         "Ein kritisches Feld bleibt auch bestätigt fehlend unvollständig")
+        self.assertFalse(antwort["exportbereit"])
+        self.assertEqual(antwort["felder"]["betrag"]["herkunft"], "im Original nicht vorhanden")
+        self.assertEqual(self._csv_zeilen(), [])
+        status, radar_body = self._senden("GET", "/api/radar", host=f"127.0.0.1:{self.port}")
+        self.assertEqual(json.loads(radar_body)["radar"], [])
+
+    def test_pruefenswertes_nicht_vorhanden_schliesst_pruefpunkt(self):
+        inhalt = _synthetische_rechnung(
+            [
+                "Beispiel Dienste AG", "Rechnung", "Datum: 01.08.2026",
+                "Betrag: 12,00 EUR", "Waehrung: EUR",
+            ]
+        )
+        self._upload_ok([("ohne_referenz.pdf", inhalt)])
+        beleg = self._erster_beleg()
+        self.assertEqual(beleg["ausgang"], "uebernommen")
+        self.assertEqual(beleg["reviewstatus"], "offen")
+
+        status, body = self._post_json(
+            f"/api/belege/{beleg['id']}/korrekturen",
+            {"felder": {
+                "referenz": {"aktion": "nicht_vorhanden"},
+                "zeitraum": {"aktion": "nicht_vorhanden"},
+            }},
+        )
+        self.assertEqual(status, 200)
+        antwort = json.loads(body)["beleg"]
+        self.assertEqual(antwort["ausgang"], "uebernommen")
+        self.assertEqual(antwort["reviewstatus"], "keine")
+        self.assertIsNone(antwort["review_aufgabe"])
+        self.assertTrue(antwort["exportbereit"])
+        punkt = next(p for p in antwort["checkliste"] if p["feld"] == "referenz")
+        self.assertTrue(punkt["erfuellt"])
+        self.assertTrue(punkt["nicht_vorhanden"])
+
+    def test_zuruecksetzen_kehrt_zum_autowert_zurueck_und_historie_bleibt(self):
+        inhalt = _synthetische_rechnung(
+            [
+                "Beispiel Dienste AG", "Rechnung Nr. RE-7", "Datum: 01.08.2026",
+                "Leistungszeitraum: monatlich", "Tarif: Standard",
+                "Betrag: 9,00 EUR", "Waehrung: EUR",
+            ]
+        )
+        self._upload_ok([("komplett.pdf", inhalt)])
+        beleg_id = self._erster_beleg()["id"]
+
+        status, _ = self._post_json(
+            f"/api/belege/{beleg_id}/korrekturen",
+            {"felder": {"anbieter": {"aktion": "setzen", "wert": "Neuer Name AG"}}},
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(self._erster_beleg()["felder"]["anbieter"]["wert"], "Neuer Name AG")
+
+        status, body = self._post_json(
+            f"/api/belege/{beleg_id}/korrekturen",
+            {"felder": {"anbieter": {"aktion": "zuruecksetzen"}}},
+        )
+        self.assertEqual(status, 200)
+        antwort = json.loads(body)["beleg"]
+        self.assertEqual(antwort["felder"]["anbieter"]["wert"], "Beispiel Dienste AG")
+        self.assertEqual(antwort["felder"]["anbieter"]["herkunft"], "aus PDF-Text")
+        self.assertEqual(antwort["korrekturversion"], 2, "Zurücksetzen ist eine eigene append-only Zeile")
+
+        conn = speicher.verbindung()
+        historie = speicher.korrekturen_fuer_beleg(conn, beleg_id)
+        conn.close()
+        self.assertEqual([k["aktion"] for k in historie], ["setzen", "zuruecksetzen"])
+        self.assertEqual([k["version"] for k in historie], [1, 2])
+        self.assertEqual(historie[0]["neuer_wert"], "Neuer Name AG",
+                         "Frühere Zeilen werden nie überschrieben")
+
+    def test_zahlungsbeleg_korrektur_loest_kein_radar_und_keine_kostenzeile_aus(self):
+        inhalt = _synthetische_rechnung(
+            [
+                "Anbieter GmbH", "Zahlungsbeleg", "Zahlung erhalten",
+                "Datum: 01.08.2026", "Betrag: 23,00 EUR", "Waehrung: EUR",
+            ]
+        )
+        self._upload_ok([("zahlung.pdf", inhalt)])
+        beleg_id = self._erster_beleg()["id"]
+        status, body = self._post_json(
+            f"/api/belege/{beleg_id}/korrekturen",
+            {"felder": {"referenz": {"aktion": "setzen", "wert": "TX-1"}}},
+        )
+        self.assertEqual(status, 200)
+        antwort = json.loads(body)["beleg"]
+        self.assertFalse(antwort["exportbereit"])
+        self.assertEqual(antwort["review_aufgabe"], "Rechnung oder Originalbeleg anfordern")
+        self.assertEqual(self._csv_zeilen(), [])
+        status, radar_body = self._senden("GET", "/api/radar", host=f"127.0.0.1:{self.port}")
+        self.assertEqual(json.loads(radar_body)["radar"], [])
+
+    def test_zeitraum_korrektur_erscheint_einheitlich_in_api_radar_und_csv(self):
+        inhalt = _synthetische_rechnung(
+            [
+                "Beispiel Dienste AG", "Rechnung Nr. RE-8", "Datum: 01.08.2026",
+                "Tarif: Standard", "Betrag: 9,00 EUR", "Waehrung: EUR",
+            ]
+        )
+        self._upload_ok([("ohne_zeitraum.pdf", inhalt)])
+        beleg_id = self._erster_beleg()["id"]
+        status, body = self._post_json(
+            f"/api/belege/{beleg_id}/korrekturen",
+            {"felder": {"zeitraum": {"aktion": "setzen", "wert": {"von": "01.08.2026", "bis": "31.08.2026"}}}},
+        )
+        self.assertEqual(status, 200)
+        antwort = json.loads(body)["beleg"]
+        self.assertEqual(antwort["felder"]["zeitraum"]["wert"], "01.08.2026 bis 31.08.2026")
+        status, radar_body = self._senden("GET", "/api/radar", host=f"127.0.0.1:{self.port}")
+        radar = json.loads(radar_body)["radar"]
+        self.assertEqual(radar[0]["zeitraum"], "01.08.2026 bis 31.08.2026")
+        zeilen = self._csv_zeilen()
+        self.assertEqual(len(zeilen), 1)
+        self.assertIn("2026-08-01 bis 2026-08-31", zeilen[0])
+
+
+class KorrekturValidierungTest(HttpTestCase):
+    """Serverseitige Validierung des Korrektur-Endpunkts."""
+
+    def _post_json(self, pfad: str, payload) -> tuple[int, bytes]:
+        body = json.dumps(payload).encode("utf-8")
+        return self._senden(
+            "POST", pfad, body=body,
+            extra_headers={"Content-Type": "application/json"},
+            host=f"127.0.0.1:{self.port}",
+        )
+
+    def _beleg_id(self) -> str:
+        self._upload_ok([("cloudbasis_juli.pdf", _lesen("cloudbasis_juli.pdf"))])
+        status, body = self._senden("GET", "/api/ergebnis", host=f"127.0.0.1:{self.port}")
+        return json.loads(body)["belege"][0]["id"]
+
+    def test_ungueltige_werte_werden_abgelehnt(self):
+        beleg_id = self._beleg_id()
+        faelle = [
+            {"betrag": {"aktion": "setzen", "wert": "abc"}},
+            {"waehrung": {"aktion": "setzen", "wert": "Euro!"}},
+            {"datum": {"aktion": "setzen", "wert": "kein Datum"}},
+            {"zeitraum": {"aktion": "setzen", "wert": {"von": "31.08.2026", "bis": "01.08.2026"}}},
+            {"anbieter": {"aktion": "setzen", "wert": "x" * 500}},
+            {"dateihash": {"aktion": "setzen", "wert": "hack"}},
+            {"anbieter": {"aktion": "unbekannt"}},
+        ]
+        for felder in faelle:
+            status, body = self._post_json(f"/api/belege/{beleg_id}/korrekturen", {"felder": felder})
+            self.assertEqual(status, 400, f"{felder} muss abgelehnt werden")
+            self.assertNotRegex(body.decode("utf-8"), r"[A-Za-z]:[\\/]")
+
+    def test_unbekannte_id_und_fremder_origin_werden_abgelehnt(self):
+        status, _ = self._post_json(
+            "/api/belege/00000000-0000-0000-0000-000000000000/korrekturen",
+            {"felder": {"anbieter": {"aktion": "nicht_vorhanden"}}},
+        )
+        self.assertEqual(status, 404)
+
+        beleg_id = self._beleg_id()
+        body = json.dumps({"felder": {"anbieter": {"aktion": "nicht_vorhanden"}}}).encode("utf-8")
+        status, _ = self._senden(
+            "POST", f"/api/belege/{beleg_id}/korrekturen", body=body,
+            extra_headers={"Content-Type": "application/json", "Origin": "https://boese.example"},
+            host=f"127.0.0.1:{self.port}",
+        )
+        self.assertEqual(status, 403)
+
+    def test_steuerzeichen_in_eingaben_werden_bereinigt(self):
+        beleg_id = self._beleg_id()
+        status, body = self._post_json(
+            f"/api/belege/{beleg_id}/korrekturen",
+            {"felder": {"anbieter": {"aktion": "setzen", "wert": "Neu\x00Name AG"}}},
+        )
+        self.assertEqual(status, 200)
+        antwort = json.loads(body)["beleg"]
+        self.assertEqual(antwort["felder"]["anbieter"]["wert"], "Neu-Name AG")
 
 
 if __name__ == "__main__":

@@ -24,6 +24,7 @@ _MONATE = {
     "sep": 9, "sept": 9, "oct": 10, "nov": 11, "dec": 12,
 }
 
+_ISO = re.compile(r"\b(\d{4})-(\d{2})-(\d{2})\b")
 _DE_NUMERISCH = re.compile(r"\b(\d{2})\.(\d{2})\.(\d{4})\b")
 _DE_AUSGESCHRIEBEN = re.compile(r"\b(\d{1,2})\.\s*([A-Za-zÄÖÜäöü]+)\s+(\d{4})\b")
 _EN = re.compile(r"\b([A-Za-z]+)\.?\s+(\d{1,2}),\s*(\d{4})\b")
@@ -44,6 +45,11 @@ def _alle_daten(text: str) -> list[date]:
     """Alle sicher erkennbaren Datumswerte im Text, in Textreihenfolge.
     Ungueltige Kalenderdaten werden uebersprungen, nie korrigiert."""
     treffer: list[tuple[int, date]] = []
+    for m in _ISO.finditer(text):
+        try:
+            treffer.append((m.start(), date(int(m.group(1)), int(m.group(2)), int(m.group(3)))))
+        except ValueError:
+            continue
     for m in _DE_NUMERISCH.finditer(text):
         try:
             treffer.append((m.start(), date(int(m.group(3)), int(m.group(2)), int(m.group(1)))))

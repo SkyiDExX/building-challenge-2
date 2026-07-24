@@ -10,6 +10,7 @@ echte Aktion dahinter.
 """
 from __future__ import annotations
 
+import json
 import sqlite3
 import uuid
 from dataclasses import dataclass
@@ -26,6 +27,7 @@ from belegwaechter import fehlertexte
 from belegwaechter import mailparser
 from belegwaechter import planen
 from belegwaechter import exportregeln
+from belegwaechter import korrekturen as korrekturen_modul
 from belegwaechter import radar as radar_modul
 from belegwaechter import speicher
 from belegwaechter import vorgang as vorgang_modul
@@ -56,6 +58,7 @@ from belegwaechter.modelle import (
     REVIEWSTATUS_OFFEN,
     AgentSchritt,
     Beleg,
+    ExtrahiertesFeld,
     Vorgang,
 )
 
@@ -729,6 +732,208 @@ def verarbeite_eml(
     _container_plan_pruefen(plaene, schritte)
 
     return vorgang, belege
+
+
+NEUBEWERTBARE_AUSGAENGE = (AUSGANG_REVIEW, AUSGANG_UEBERNOMMEN)
+
+
+def neubewerten(conn: sqlite3.Connection, beleg_id: str) -> Beleg | None:
+    """Bewertet einen bestehenden Beleg nach einer manuellen Korrektur
+    erneut: effektive Feldwerte (automatische Extraktion plus letzte
+    gueltige Korrektur) durchlaufen die dokumentartabhaengige Checkliste,
+    den Bestandsabgleich (ohne den eigenen Beleg -- keine Selbst-Dublette)
+    und, nur fuer geeignete Kosten-Belege, den Abovergleich. Die bestehende
+    Belegzeile wird aktualisiert; es entsteht nie ein neuer Beleg und nie
+    eine neue Datei. Liefert None fuer unbekannte oder nicht neubewertbare
+    Belege (Technikfaelle wie Signaturwiderspruch bleiben unveraendert)."""
+    row = speicher.beleg_nach_id(conn, beleg_id)
+    if row is None or row["ausgang"] not in NEUBEWERTBARE_AUSGAENGE:
+        return None
+
+    auto_felder = json.loads(row["felder_json"])
+    korrekturliste = speicher.korrekturen_fuer_beleg(conn, beleg_id)
+    effektiv, nicht_vorhanden = korrekturen_modul.effektive_felder(auto_felder, korrekturliste)
+
+    beleg = Beleg(
+        id=row["id"],
+        lauf_id=row["lauf_id"],
+        dateiname=row["dateiname"],
+        dateihash=row["dateihash"],
+        dateityp=row["dateityp"],
+        stufe=row["stufe"],
+        quellenstatus=row["quellenstatus"],
+        speichername=row["speichername"] or "",
+        storage_key=row["storage_key"],
+        extraktionsmethode=row["extraktionsmethode"] or "keine",
+        fehlercode=row["fehlercode"],
+        dokumentart=row["dokumentart"],
+        vorgang_id=row["vorgang_id"],
+    )
+    beleg.felder = {
+        name: ExtrahiertesFeld(name, werte["wert"], werte["herkunft"])
+        for name, werte in effektiv.items()
+    }
+
+    lauf_id = speicher.neuer_lauf(conn)
+    text_lesbar = beleg.extraktionsmethode in ("pypdf-textlayer", "mailtext")
+
+    t0 = _jetzt()
+    geaenderte = sorted({k["feld"] for k in korrekturliste})
+    _schritt(
+        beleg, "Angaben manuell ergänzt", "ok", "manuelle-korrektur",
+        "Manuell geprüfte Felder: " + (", ".join(geaenderte) or "keine") + ".",
+        t0, _jetzt(),
+    )
+
+    # Vollstaendigkeit mit effektiven Werten und bestaetigten Abwesenheiten.
+    t0 = _jetzt()
+    checkliste = checkliste_pruefen(
+        beleg, text_lesbar=text_lesbar, dokumentart=beleg.dokumentart,
+        nicht_vorhanden=nicht_vorhanden,
+    )
+    beleg.checkliste = checkliste
+    erfuellt = sum(1 for c in checkliste if c.erfuellt)
+    _schritt(
+        beleg, "Vollständigkeit geprüft", "ok", "checkliste-fail-closed",
+        f"{erfuellt}/{len(checkliste)} Checklisten-Punkte erfüllt "
+        f"(Dokumentart: {beleg.dokumentart or 'unbestimmt'}).",
+        t0, _jetzt(),
+    )
+
+    # Bestandsabgleich ohne den eigenen Beleg: keine Selbst-Dublette.
+    t0 = _jetzt()
+    bestand = [e for e in speicher.bestand_uebernommen(conn) if e["id"] != beleg_id]
+    dublette_treffer = bestand_modul.ist_datei_duplikat(beleg, bestand)
+    if dublette_treffer:
+        dublette_treffer = dict(dublette_treffer)
+        dublette_treffer["_grund"] = "datei-hash"
+    else:
+        dublette_treffer = bestand_modul.ist_dublette(beleg, bestand)
+    _schritt(
+        beleg, "Bestand abgeglichen", "ok", "hash-und-referenz-abgleich",
+        "Dublette gegen bestehenden Bestand gefunden." if dublette_treffer
+        else "Kein Datei-Duplikat und keine Dublette (eigener Beleg ausgenommen).",
+        t0, _jetzt(),
+    )
+
+    if dublette_treffer:
+        ausgang = AUSGANG_DUBLETTE
+        begruendung = (
+            "Doppelt, aussortiert: nach der manuellen Korrektur stimmt dieser "
+            f"Beleg mit dem bereits übernommenen Beleg '{dublette_treffer['dateiname']}' überein."
+        )
+    elif not kritisch_vollstaendig(checkliste):
+        ausgang = AUSGANG_REVIEW
+        begruendung = (
+            "Bitte ansehen: folgende kritische Angaben sind nicht eindeutig "
+            "erfüllt: " + ", ".join(fehlende_kritische(checkliste)) + "."
+        )
+    else:
+        pruefenswert_offen = fehlende_pruefenswerte(checkliste)
+        ausgang = AUSGANG_UEBERNOMMEN
+        if pruefenswert_offen:
+            begruendung = (
+                "Übernommen: alle kritischen Angaben vorhanden. Noch zu prüfen: "
+                + ", ".join(pruefenswert_offen) + "."
+            )
+        else:
+            begruendung = "Übernommen: alle kritischen Angaben vorhanden (nach manueller Prüfung)."
+
+    beleg.ausgang = ausgang
+    beleg.begruendung = begruendung
+    anbieter_schluessel_wert = bestand_modul.anbieter_schluessel(beleg)
+    betrag_dezimal_wert = betraege.betrag_zu_decimal(beleg.feldwert("betrag"))
+    beleg.betrag_dezimal = betraege.decimal_zu_csv_zahl(betrag_dezimal_wert) or None
+
+    # Abovergleich nur fuer geeignete Kosten-Belege unter den bestehenden
+    # Baseline-Regeln; Zahlungsbelege und Abo-Bestaetigungen bleiben aussen vor.
+    t0 = _jetzt()
+    radar_eintrag = None
+    if (
+        ausgang == AUSGANG_UEBERNOMMEN
+        and beleg.dokumentart in exportregeln.KOSTENARTEN
+    ):
+        vorheriger = bestand_modul.letzte_baseline(beleg, bestand)
+        radar_eintrag = radar_modul.radar_bewerten(beleg, vorheriger)
+        beleg.radar_hinweis = radar_eintrag.begruendung
+        _schritt(beleg, "Abovergleich bewertet", "ok", "radar-vergleichbarkeit", radar_eintrag.begruendung, t0, _jetzt())
+    else:
+        _schritt(
+            beleg, "Abovergleich bewertet", "uebersprungen", "keins",
+            "Übersprungen: kein exportfähiger Kosten-Beleg.", t0, _jetzt(),
+        )
+
+    dokumentstatus, reviewstatus, review_aufgabe = _status_ableiten(
+        ausgang, checkliste, radar_eintrag.einschaetzung if radar_eintrag else None
+    )
+    if beleg.dokumentart == DOKUMENTART_ZAHLUNGSBELEG and ausgang in (AUSGANG_REVIEW, AUSGANG_UEBERNOMMEN):
+        rechnung_im_vorgang = False
+        if beleg.vorgang_id:
+            rechnung_im_vorgang = conn.execute(
+                "SELECT COUNT(*) FROM belege WHERE vorgang_id = ? AND dokumentart = 'rechnung'",
+                (beleg.vorgang_id,),
+            ).fetchone()[0] > 0
+        if not rechnung_im_vorgang:
+            reviewstatus = REVIEWSTATUS_OFFEN
+            review_aufgabe = vorgang_modul.AUFGABE_RECHNUNG_ANFORDERN
+    if beleg.dokumentart == DOKUMENTART_ABO_BESTAETIGUNG and ausgang in (AUSGANG_REVIEW, AUSGANG_UEBERNOMMEN):
+        reviewstatus = REVIEWSTATUS_OFFEN
+        review_aufgabe = vorgang_modul.abo_bestaetigung_review_aufgabe(None)
+    beleg.dokumentstatus = dokumentstatus
+    beleg.reviewstatus = reviewstatus
+    beleg.review_aufgabe = review_aufgabe
+    beleg.baseline_bestaetigt = (
+        exportregeln.exportfaehig(beleg.dokumentart, ausgang, checkliste)
+        and (radar_eintrag is None or radar_eintrag.einschaetzung in (RADAR_NEU, RADAR_STABIL, RADAR_VERAENDERT_EINDEUTIG))
+    )
+
+    _schritt(beleg, "Entscheidung getroffen", "ok", "entscheidungsregeln", begruendung, _jetzt(), _jetzt())
+
+    # Speichern: dieselbe Belegzeile, kein neuer Beleg, keine neue Datei.
+    t0 = _jetzt()
+    speicher.beleg_neubewertung_speichern(conn, beleg, anbieter_schluessel_wert, radar_eintrag)
+    _schritt(beleg, "Ergebnis gespeichert", "ok", "sqlite", f"Beleg aktualisiert mit Ausgang '{ausgang}'.", t0, _jetzt())
+
+    # Planhistorie: neue Version mit Revisionsgrund, bestehende Invarianten
+    # (aufsteigende Version, protokollierter Grund) bleiben erfuellt.
+    plaene = speicher.plaene_fuer_beleg(conn, beleg_id)
+    letzte_version = plaene[-1]["plan"]["version"] if plaene else 0
+    letzte_quellenklasse = plaene[-1]["plan"]["quellenklasse"] if plaene else "unbekannt"
+    revisionsplan = planen.Ausfuehrungsplan(
+        version=letzte_version + 1,
+        ziel="Beleg nach manueller Korrektur erneut bewerten.",
+        quellenklasse=letzte_quellenklasse,
+        werkzeuge={
+            "checkliste": planen.Werkzeugschritt(
+                "checkliste", "checkliste-fail-closed", True,
+                "Neubewertung mit effektiven Feldwerten.",
+            ),
+            "bestand": planen.Werkzeugschritt(
+                "bestand", "hash-und-referenz-abgleich", True,
+                "Neubewertung: Bestandsabgleich ohne den eigenen Beleg.",
+            ),
+            "radar": planen.Werkzeugschritt(
+                "radar", "radar-vergleichbarkeit", radar_eintrag is not None,
+                "Abovergleich nur für exportfähige Kosten-Belege.",
+            ),
+        },
+        revisionsgrund="Manuelle Korrektur: Beleg erneut bewertet.",
+    )
+    speicher.plan_speichern(conn, lauf_id, beleg_id, revisionsplan, vorgang_id=beleg.vorgang_id)
+
+    speicher.audit_schreiben(
+        conn, aktion="Angaben manuell ergänzt", objekt=beleg.dateiname,
+        alt=None, neu="Manuell geprüfte Felder: " + (", ".join(geaenderte) or "keine") + ".",
+    )
+    speicher.audit_schreiben(
+        conn, aktion="Beleg erneut geprüft", objekt=beleg.dateiname,
+        alt=row["begruendung"],
+        neu=f"{begruendung} Nächste Aktion: {review_aufgabe or 'keine'}.",
+    )
+    for schritt in beleg.schritte:
+        speicher.agent_schritt_speichern(conn, lauf_id, beleg_id, schritt, vorgang_id=beleg.vorgang_id)
+
+    return beleg
 
 
 def verarbeite_charge(conn: sqlite3.Connection, dateien_liste: list[tuple[str, bytes]]) -> tuple[str, list[Beleg]]:

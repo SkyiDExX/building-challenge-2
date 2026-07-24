@@ -257,10 +257,34 @@ def _migration_003_dokumentart_und_vorgaenge(conn: sqlite3.Connection) -> None:
         conn.execute(anweisung)
 
 
+def _migration_004_beleg_korrekturen(conn: sqlite3.Connection) -> None:
+    """Append-only Historie manueller Feldkorrekturen. Die automatisch
+    extrahierten Rohwerte in belege.felder_json bleiben unveraendert; jede
+    Nutzerhandlung (setzen, bestaetigen, als nicht vorhanden bestaetigen,
+    zuruecksetzen) wird als eigene Zeile mit aufsteigender Version je Beleg
+    festgehalten. Es gibt kein UPDATE und kein DELETE auf dieser Tabelle."""
+    conn.execute(
+        """
+        CREATE TABLE beleg_korrekturen (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            beleg_id TEXT NOT NULL,
+            feld TEXT NOT NULL,
+            aktion TEXT NOT NULL,
+            alter_wert TEXT,
+            neuer_wert TEXT,
+            quelle TEXT NOT NULL DEFAULT 'manuell',
+            version INTEGER NOT NULL,
+            erstellt_am TEXT NOT NULL
+        )
+        """
+    )
+
+
 MIGRATIONEN = [
     _migration_001_initial_schema,
     _migration_002_provenienz_status_und_plan,
     _migration_003_dokumentart_und_vorgaenge,
+    _migration_004_beleg_korrekturen,
 ]
 
 
@@ -548,6 +572,94 @@ def beleg_review_setzen(
             "UPDATE belege SET reviewstatus = ?, review_aufgabe = ? WHERE id = ?",
             (reviewstatus, review_aufgabe, beleg_id),
         )
+    conn.commit()
+
+
+def korrektur_anhaengen(
+    conn: sqlite3.Connection, beleg_id: str, feld: str, aktion: str,
+    alter_wert: str | None, neuer_wert: str | None,
+) -> int:
+    """Haengt genau eine Korrekturzeile an (append-only) und liefert die
+    neue Korrekturversion des Belegs."""
+    version = conn.execute(
+        "SELECT COALESCE(MAX(version), 0) + 1 FROM beleg_korrekturen WHERE beleg_id = ?",
+        (beleg_id,),
+    ).fetchone()[0]
+    conn.execute(
+        """
+        INSERT INTO beleg_korrekturen (
+            beleg_id, feld, aktion, alter_wert, neuer_wert, quelle, version, erstellt_am
+        ) VALUES (?, ?, ?, ?, ?, 'manuell', ?, datetime('now'))
+        """,
+        (beleg_id, feld, aktion, alter_wert, neuer_wert, version),
+    )
+    conn.commit()
+    return version
+
+
+def korrekturen_fuer_beleg(conn: sqlite3.Connection, beleg_id: str) -> list[dict]:
+    rows = conn.execute(
+        "SELECT * FROM beleg_korrekturen WHERE beleg_id = ? ORDER BY id ASC", (beleg_id,)
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def beleg_nach_id(conn: sqlite3.Connection, beleg_id: str) -> dict | None:
+    row = conn.execute("SELECT * FROM belege WHERE id = ?", (beleg_id,)).fetchone()
+    return dict(row) if row is not None else None
+
+
+def beleg_neubewertung_speichern(conn: sqlite3.Connection, beleg: Beleg, anbieter_schluessel: str | None, radar: RadarEintrag | None) -> None:
+    """Aktualisiert die bestehende Belegzeile nach einer Neubewertung mit
+    den EFFEKTIVEN Feldwerten und der neuen Entscheidung. felder_json (die
+    automatischen Rohwerte) bleibt unveraendert -- Provenienz und
+    Zuruecksetzen stuetzen sich darauf. Es entsteht nie ein neuer Beleg."""
+    checkliste_json = json.dumps(
+        [
+            {
+                "name": c.name,
+                "erfuellt": c.erfuellt,
+                "kategorie": c.kategorie,
+                "feld": c.feld,
+                "nicht_vorhanden": c.nicht_vorhanden,
+            }
+            for c in beleg.checkliste
+        ],
+        ensure_ascii=False,
+    )
+    conn.execute(
+        """
+        UPDATE belege SET
+            anbieter = ?, anbieter_schluessel = ?, datum = ?, betrag = ?,
+            waehrung = ?, zeitraum = ?, tarif = ?, referenz = ?,
+            checkliste_json = ?, ausgang = ?, begruendung = ?,
+            radar_einschaetzung = ?, radar_begruendung = ?,
+            dokumentstatus = ?, reviewstatus = ?, review_aufgabe = ?,
+            baseline_bestaetigt = ?, betrag_dezimal = ?
+        WHERE id = ?
+        """,
+        (
+            beleg.feldwert("anbieter"),
+            anbieter_schluessel,
+            beleg.feldwert("datum"),
+            beleg.feldwert("betrag"),
+            beleg.feldwert("waehrung"),
+            beleg.feldwert("zeitraum"),
+            beleg.feldwert("tarif"),
+            beleg.feldwert("referenz"),
+            checkliste_json,
+            beleg.ausgang,
+            beleg.begruendung,
+            radar.einschaetzung if radar else None,
+            radar.begruendung if radar else None,
+            beleg.dokumentstatus,
+            beleg.reviewstatus,
+            beleg.review_aufgabe,
+            1 if beleg.baseline_bestaetigt else 0,
+            beleg.betrag_dezimal,
+            beleg.id,
+        ),
+    )
     conn.commit()
 
 

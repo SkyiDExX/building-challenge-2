@@ -17,13 +17,14 @@ import io
 import json
 import re
 import sys
+from datetime import date
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
-from belegwaechter import agent, dateinamen, datumformat, exportregeln, speicher, steuerzeichen  # noqa: E402
+from belegwaechter import agent, betraege, dateinamen, datumformat, exportregeln, korrekturen, speicher, steuerzeichen  # noqa: E402
 from belegwaechter.fehlertexte import bereinigen  # noqa: E402
 
 HOST = "127.0.0.1"
@@ -58,6 +59,10 @@ _QUELLENSTATUS_ANZEIGE = {
 # Original-PDF-Route: die Beleg-ID ist der einzige Client-Input; sie wird
 # nur als DB-Schluessel verwendet, nie als Pfadbestandteil.
 _BELEG_ORIGINAL_MUSTER = re.compile(r"^/api/belege/([A-Za-z0-9-]{1,64})/original$")
+_BELEG_KORREKTUR_MUSTER = re.compile(r"^/api/belege/([A-Za-z0-9-]{1,64})/korrekturen$")
+_WAEHRUNG_MUSTER = re.compile(r"^[A-Z]{3}$")
+_MAX_KORREKTUR_FELDLAENGE = 200
+_MAX_KORREKTUR_BODY = 64 * 1024
 
 MAX_ANFRAGE_BYTES = 20 * 1024 * 1024  # gesamte HTTP-Anfrage
 MAX_DATEI_BYTES = 10 * 1024 * 1024  # einzelne Datei
@@ -110,8 +115,11 @@ def _original_pdf_verfuegbar(row: dict) -> bool:
         return False
 
 
-def _beleg_zu_json(row: dict, plaene: list[dict]) -> dict:
-    felder = json.loads(row["felder_json"])
+def _beleg_zu_json(row: dict, plaene: list[dict], korrekturliste: list[dict] | None = None) -> dict:
+    # Effektive Felder (automatische Rohwerte plus letzte gueltige manuelle
+    # Korrektur) sind die einzige fachliche Sicht der API.
+    auto_felder = json.loads(row["felder_json"])
+    felder, _ = korrekturen.effektive_felder(auto_felder, korrekturliste or [])
     for feld in felder.values():
         if feld.get("wert") is not None:
             feld["wert"] = steuerzeichen.feldwert_bereinigen(feld["wert"])
@@ -134,6 +142,7 @@ def _beleg_zu_json(row: dict, plaene: list[dict]) -> dict:
         "exportbereit": exportregeln.exportfaehig(
             row["dokumentart"], row["ausgang"], exportregeln.checkliste_aus_json(checkliste)
         ),
+        "korrekturversion": max((k["version"] for k in korrekturliste or []), default=0),
         "id": row["id"],
         "lauf_id": row["lauf_id"],
         "dateiname": row["dateiname"],
@@ -338,6 +347,126 @@ class BelegwaechterHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(inhalt)
 
+    def _korrektur_wert_pruefen(self, feld: str, wert) -> tuple[str | None, str | None]:
+        """Serverseitige Validierung eines manuell gesetzten Werts. Liefert
+        (normalisierter_wert, fehlermeldung). Alle Werte werden
+        steuerzeichenbereinigt und laengenbegrenzt; Betrag, Waehrung, Datum
+        und Zeitraum zusaetzlich fachlich geprueft. Datums- und
+        Zeitraumwerte werden intern ISO-basiert gespeichert."""
+        def _datum_iso(text) -> str | None:
+            if not isinstance(text, str):
+                return None
+            sauber = steuerzeichen.feldwert_bereinigen(text)
+            if not sauber:
+                return None
+            iso = datumformat.datum_csv(sauber)
+            try:
+                date.fromisoformat(iso)
+            except (TypeError, ValueError):
+                return None
+            return iso
+
+        if feld == "zeitraum":
+            if not isinstance(wert, dict):
+                return None, "Zeitraum braucht 'von' und 'bis'."
+            von = _datum_iso(wert.get("von"))
+            bis = _datum_iso(wert.get("bis"))
+            if von is None or bis is None:
+                return None, "Zeitraum braucht zwei gültige Datumswerte."
+            if bis < von:
+                return None, "Das Zeitraumende darf nicht vor dem Zeitraumstart liegen."
+            return f"{von} bis {bis}", None
+
+        if not isinstance(wert, str):
+            return None, "Der Wert muss Text sein."
+        sauber = steuerzeichen.feldwert_bereinigen(wert)
+        if not sauber:
+            return None, "Der Wert darf nicht leer sein."
+        if len(sauber) > _MAX_KORREKTUR_FELDLAENGE:
+            return None, "Der Wert ist zu lang."
+        if feld == "betrag":
+            if betraege.betrag_zu_decimal(sauber) is None:
+                return None, "Der Betrag ist nicht als Zahl lesbar (z.B. 19,99)."
+            return sauber, None
+        if feld == "waehrung":
+            sauber = sauber.upper()
+            if not _WAEHRUNG_MUSTER.match(sauber):
+                return None, "Die Währung muss ein ISO-Code mit drei Buchstaben sein."
+            return sauber, None
+        if feld == "datum":
+            iso = _datum_iso(sauber)
+            if iso is None:
+                return None, "Das Datum ist nicht als gültiges Datum lesbar."
+            return iso, None
+        return sauber, None
+
+    def _korrekturen_anwenden(self, beleg_id: str) -> None:
+        """POST /api/belege/<id>/korrekturen: validiert manuelle Angaben,
+        haengt sie append-only an und bewertet den Beleg erneut. Nur
+        fachliche Felder sind korrigierbar; Status, Hashes und Provenienz
+        sind nie schreibbar."""
+        laenge = int(self.headers.get("Content-Length", "0"))
+        if laenge > _MAX_KORREKTUR_BODY:
+            _rumpf_verwerfen(self.rfile, laenge)
+            self._json(413, {"fehler": "Die Anfrage ist zu groß."})
+            return
+        try:
+            daten = json.loads(self.rfile.read(laenge).decode("utf-8"))
+        except (ValueError, UnicodeDecodeError):
+            self._json(400, {"fehler": "Erwartet wird gültiges JSON."})
+            return
+        feld_angaben = daten.get("felder") if isinstance(daten, dict) else None
+        if not isinstance(feld_angaben, dict) or not feld_angaben:
+            self._json(400, {"fehler": "Es wurden keine Feldangaben übermittelt."})
+            return
+
+        conn = speicher.verbindung()
+        try:
+            row = speicher.beleg_nach_id(conn, beleg_id)
+            if row is None or row["ausgang"] not in agent.NEUBEWERTBARE_AUSGAENGE:
+                self._json(404, {"fehler": "nicht gefunden"})
+                return
+            auto_felder = json.loads(row["felder_json"])
+            bisherige = speicher.korrekturen_fuer_beleg(conn, beleg_id)
+            effektiv_vorher, _ = korrekturen.effektive_felder(auto_felder, bisherige)
+
+            validierte: list[tuple[str, str, str | None, str | None]] = []
+            for feld, angabe in feld_angaben.items():
+                if feld not in korrekturen.KORRIGIERBARE_FELDER:
+                    self._json(400, {"fehler": "Dieses Feld ist nicht korrigierbar."})
+                    return
+                aktion = angabe.get("aktion") if isinstance(angabe, dict) else None
+                if aktion not in korrekturen.AKTIONEN:
+                    self._json(400, {"fehler": "Unbekannte Aktion."})
+                    return
+                alter_wert = effektiv_vorher.get(feld, {}).get("wert")
+                neuer_wert = None
+                if aktion == korrekturen.AKTION_SETZEN:
+                    neuer_wert, fehler = self._korrektur_wert_pruefen(feld, angabe.get("wert"))
+                    if fehler:
+                        self._json(400, {"fehler": fehler})
+                        return
+                elif aktion == korrekturen.AKTION_BESTAETIGEN:
+                    if alter_wert in (None, ""):
+                        self._json(400, {"fehler": "Ohne erkannten Wert gibt es nichts zu bestätigen."})
+                        return
+                    neuer_wert = alter_wert
+                validierte.append((feld, aktion, alter_wert, neuer_wert))
+
+            for feld, aktion, alter_wert, neuer_wert in validierte:
+                speicher.korrektur_anhaengen(conn, beleg_id, feld, aktion, alter_wert, neuer_wert)
+
+            agent.neubewerten(conn, beleg_id)
+            row_neu = speicher.beleg_nach_id(conn, beleg_id)
+            antwort = _beleg_zu_json(
+                row_neu,
+                speicher.plaene_fuer_beleg(conn, beleg_id),
+                speicher.korrekturen_fuer_beleg(conn, beleg_id),
+            )
+        finally:
+            conn.close()
+        self._json(200, {"beleg": antwort})
+
     def do_GET(self) -> None:  # noqa: N802
         if self.path == "/" or self.path == "/index.html":
             self._datei(STATIC_DIR / "index.html", "text/html; charset=utf-8")
@@ -364,7 +493,11 @@ class BelegwaechterHandler(BaseHTTPRequestHandler):
                 return
             conn = speicher.verbindung()
             belege = [
-                _beleg_zu_json(r, speicher.plaene_fuer_beleg(conn, r["id"]))
+                _beleg_zu_json(
+                    r,
+                    speicher.plaene_fuer_beleg(conn, r["id"]),
+                    speicher.korrekturen_fuer_beleg(conn, r["id"]),
+                )
                 for r in speicher.alle_belege(conn)
             ]
             vorgaenge = [_vorgang_zu_json(r) for r in speicher.vorgaenge_liste(conn)]
@@ -443,7 +576,17 @@ class BelegwaechterHandler(BaseHTTPRequestHandler):
             self._json(404, {"fehler": "nicht gefunden"})
 
     def do_POST(self) -> None:  # noqa: N802
-        if self.path == "/api/verarbeiten":
+        if self.path.startswith("/api/belege/"):
+            treffer = _BELEG_KORREKTUR_MUSTER.match(self.path)
+            if treffer is None:
+                self._json(404, {"fehler": "nicht gefunden"})
+                return
+            erlaubt, code, fehler = _zugriff_erlaubt(self, veraendernd=True)
+            if not erlaubt:
+                self._json(code, fehler)
+                return
+            self._korrekturen_anwenden(treffer.group(1))
+        elif self.path == "/api/verarbeiten":
             erlaubt, code, fehler = _zugriff_erlaubt(self, veraendernd=True)
             if not erlaubt:
                 self._json(code, fehler)

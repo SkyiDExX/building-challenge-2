@@ -1,7 +1,7 @@
 # INSTALL.md — Anleitung für Claude Code
 
 > **An Claude:** Diese Datei ist an dich adressiert. Führe die Schritte
-> nacheinander aus, wenn ein Mensch dich bittet, den Belegwächter lokal
+> nacheinander aus, wenn ein Mensch dich bittet, OptiTax lokal
 > lauffähig zu machen (z.B. auf einem frischen Rechner oder nach einem
 > `git clone`).
 

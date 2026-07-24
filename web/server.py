@@ -31,14 +31,16 @@ PORT = 8850
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 ASSETS_DIR = STATIC_DIR / "assets"
 
-# Nur einfache, flache Dateinamen ohne Pfadtrennzeichen -- kein Traversal
-# moeglich, unabhaengig von der zusaetzlichen Basis-Pruefung in _asset_datei.
-_ASSET_PFAD_MUSTER = re.compile(r"^/assets/[A-Za-z0-9._-]+$")
+# Nur einfache Dateinamen ohne Pfadtrennzeichen, optional im festen
+# Unterordner brand/ (Marken-Assets) -- kein Traversal moeglich, unabhaengig
+# von der zusaetzlichen Basis-Pruefung in _asset_datei.
+_ASSET_PFAD_MUSTER = re.compile(r"^/assets/(?:brand/)?[A-Za-z0-9._-]+$")
 _ASSET_CONTENT_TYPES = {
     ".jpg": "image/jpeg",
     ".jpeg": "image/jpeg",
     ".png": "image/png",
     ".webp": "image/webp",
+    ".ico": "image/x-icon",
 }
 
 # Die Kosten-CSV bildet wirtschaftliche Kosten ab, nicht jede vorhandene
@@ -323,7 +325,7 @@ class BelegwaechterHandler(BaseHTTPRequestHandler):
             body = ("﻿" + puffer.getvalue()).encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "text/csv; charset=utf-8")
-            self.send_header("Content-Disposition", 'attachment; filename="belegwaechter_export.csv"')
+            self.send_header("Content-Disposition", 'attachment; filename="optitax_export.csv"')
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)

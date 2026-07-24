@@ -3,8 +3,10 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Belegwächter</title>
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M12 2 4 5v6c0 5 3.4 9.4 8 11 4.6-1.6 8-6 8-11V5l-8-3z' fill='%231d4f8c' stroke='%236ea3e8' stroke-width='1.6'/%3E%3Cpath d='M8.5 12l2.5 2.5 4.5-5' fill='none' stroke='%23ffffff' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+<title>OptiTax – Rechnungen und Abos im Blick</title>
+<link rel="icon" href="/assets/brand/optitax-favicon.ico" type="image/x-icon">
+<link rel="apple-touch-icon" href="/assets/brand/optitax-icon-192.png">
+<meta name="theme-color" content="#0d1522">
 <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
@@ -15,10 +17,14 @@
 
 <header class="kopf">
   <div class="kopf-titel">
-    <svg class="logo" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2 4 5v6c0 5 3.4 9.4 8 11 4.6-1.6 8-6 8-11V5l-8-3z" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M8.5 12l2.5 2.5 4.5-5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    <h1 class="marke">
+      <span class="nur-vorleser">OptiTax</span>
+      <img class="marke-wortmarke" src="/assets/brand/optitax-wordmark.png" alt="" aria-hidden="true">
+      <img class="marke-icon" src="/assets/brand/optitax-icon-64.png" srcset="/assets/brand/optitax-icon-64.png 1x, /assets/brand/optitax-icon-192.png 2x" width="40" height="40" alt="" aria-hidden="true">
+    </h1>
     <div>
-      <h1>Belegwächter</h1>
-      <p class="untertitel">Belege und Kostennachweise rein, geprüfte Übersicht raus.</p>
+      <p class="untertitel">Rechnungen und Abos im Blick.</p>
+      <p class="nutzenhinweis">Belege und Kostennachweise rein, geprüfte Übersicht raus.</p>
     </div>
   </div>
   <button id="reset-btn" class="btn btn-sekundaer" type="button">Demo zurücksetzen</button>
@@ -79,7 +85,7 @@
   <div class="detail" role="dialog" aria-modal="true" aria-labelledby="detail-titel">
     <div class="detail-kopf">
       <h3 id="detail-titel"></h3>
-      <button id="detail-schliessen" class="btn btn-sekundaer" type="button">Schließen (Esc)</button>
+      <button id="detail-schliessen" class="schliessen-btn" type="button" aria-label="Schließen" title="Schließen"><img src="/assets/brand/optitax-close-x-32.png" width="28" height="28" alt=""></button>
     </div>
     <div class="detail-status">
       <h4>Entscheidung des Agenten</h4>
@@ -112,6 +118,7 @@
 <!-- Reset-Dialog -->
 <div id="reset-overlay" class="detail-overlay" hidden>
   <div class="detail dialog-klein" role="dialog" aria-modal="true" aria-labelledby="reset-frage">
+    <button id="reset-schliessen" class="schliessen-btn dialog-schliessen" type="button" aria-label="Schließen" title="Schließen"><img src="/assets/brand/optitax-close-x-32.png" width="28" height="28" alt=""></button>
     <p id="reset-frage">Alle Demo-Daten löschen und von vorn beginnen?</p>
     <div class="dialog-aktionen">
       <button id="reset-ja" class="btn btn-primaer" type="button">Ja, zurücksetzen</button>
@@ -121,7 +128,7 @@
 </div>
 
 <footer class="seiten-fuss">
-  Belegwächter — lokal, ohne externe Dienste. Keine Steuerberatung, keine rechtliche Sicherheit, keine Compliance-Zusage.
+  OptiTax — lokal, ohne externe Dienste. Keine Steuerberatung, keine rechtliche Sicherheit, keine Compliance-Zusage.
 </footer>
 
 <script src="/app.js"></script>

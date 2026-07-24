@@ -1,4 +1,4 @@
-# Final Sprint — Belegwächter
+# Final Sprint — OptiTax
 
 Ab jetzt maßgebliche Arbeitsgrundlage für alle verbleibenden Schritte bis
 zur Abgabe. MASTER_PLAN.md und UX_DEMO_SPEC.md bleiben als historisches

@@ -405,6 +405,7 @@ $("detail-overlay").addEventListener("click", (e) => { if (e.target === $("detai
 
 $("reset-btn").addEventListener("click", () => { $("reset-overlay").hidden = false; $("reset-nein").focus(); });
 $("reset-nein").addEventListener("click", () => { $("reset-overlay").hidden = true; });
+$("reset-schliessen").addEventListener("click", () => { $("reset-overlay").hidden = true; });
 $("reset-overlay").addEventListener("click", (e) => { if (e.target === $("reset-overlay")) $("reset-overlay").hidden = true; });
 $("reset-ja").addEventListener("click", async () => {
   await fetch("/api/reset", { method: "POST" });
@@ -415,7 +416,7 @@ $("reset-ja").addEventListener("click", async () => {
 });
 
 $("export-btn").addEventListener("click", () => {
-  $("export-status").textContent = "belegwaechter_export.csv wird heruntergeladen …";
+  $("export-status").textContent = "optitax_export.csv wird heruntergeladen …";
 });
 
 document.addEventListener("keydown", (e) => {

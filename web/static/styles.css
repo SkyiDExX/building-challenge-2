@@ -1,4 +1,4 @@
-/* Belegwächter — Liquid-Glass-Oberfläche.
+/* OptiTax — Liquid-Glass-Oberfläche.
    Bewusst EIN dunkles, atmosphärisches Design (Nachtblau/Graphit mit warmem
    Akzentglühen) statt Hell/Dunkel-Umschaltung: alle Kontraste sind auf diese
    eine Fläche abgestimmt. Hintergrundfoto liegt lokal unter web/static/assets/
@@ -38,9 +38,16 @@
   --text: #e9edf4;
   --text-leise: #a3b0c2;
 
+  /* OptiTax-Markenfarben: Orangeverlauf, abgeleitet aus dem Logo-X.
+     Kein Neon, harmoniert mit dem warmen Eckglühen des Hintergrunds. */
+  --brand-orange-hell: #ffb076;
+  --brand-orange: #f28a45;
+  --brand-orange-dunkel: #d96a26;
+  --brand-orange-glow: rgba(242, 138, 69, 0.35);
+  --brand-focus: #ffb076;
+
   /* Akzente */
-  --akzent: #85b4f2;
-  --akzent-tief: #2a4f86;
+  --akzent: var(--brand-orange);
   --akzent-text: #0d1522;
   --warm: rgba(224, 150, 92, 0.14);
 
@@ -48,9 +55,11 @@
   --gruen-bg: rgba(72, 190, 120, 0.16); --gruen-text: #93e2ad; --gruen-linie: rgba(120, 220, 155, 0.38);
   --gelb-bg: rgba(238, 195, 90, 0.15); --gelb-text: #f2d489; --gelb-linie: rgba(240, 205, 120, 0.4);
   --grau-bg: rgba(165, 180, 200, 0.13); --grau-text: #bcc7d5; --grau-linie: rgba(185, 200, 218, 0.32);
-  --blau-bg: rgba(108, 160, 240, 0.16); --blau-text: #adcbf7; --blau-linie: rgba(140, 180, 245, 0.4);
+  /* "Original angefordert" ist Status, keine Aktion: neutrale Silbertoenung
+     statt Markenorange, damit der Badge nichts Klickbares suggeriert. */
+  --blau-bg: rgba(196, 208, 224, 0.12); --blau-text: #ccd6e2; --blau-linie: rgba(196, 208, 224, 0.34);
 
-  --fokus: #8ab8f8;
+  --fokus: var(--brand-focus);
   --schatten-zone: 0 12px 34px rgba(4, 8, 16, 0.42);
   --schatten-karte: 0 4px 16px rgba(4, 8, 16, 0.28);
   --schatten-modal: 0 24px 70px rgba(2, 5, 12, 0.65);
@@ -86,7 +95,7 @@ body {
       rgba(7, 11, 18, 0.72) 84%,
       rgba(5, 8, 13, 0.93) 100%
     ),
-    radial-gradient(900px 620px at 85% -12%, rgba(88, 134, 212, 0.16), transparent 62%),
+    radial-gradient(900px 620px at 85% -12%, rgba(230, 140, 80, 0.13), transparent 62%),
     radial-gradient(1100px 720px at -12% 112%, var(--warm), transparent 56%),
     radial-gradient(720px 520px at 55% 122%, rgba(122, 96, 200, 0.08), transparent 62%),
     var(--hintergrundfoto);
@@ -117,10 +126,25 @@ body {
   max-width: 1120px;
   margin: 0 auto;
 }
-.kopf-titel { display: flex; align-items: center; gap: 12px; }
-.logo { width: 40px; height: 40px; color: var(--akzent); flex-shrink: 0; filter: drop-shadow(0 2px 8px rgba(133, 180, 242, 0.35)); }
+.kopf-titel { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; min-width: 0; }
+/* Markenbilder: unveraendert eingebunden (nur skaliert), keine Farb- oder
+   Gluehfilter, Proportionen via object-fit gesichert. Desktop zeigt die
+   Wortmarke, schmale Fenster nur das Icon; der zugaengliche Name "OptiTax"
+   steht immer als versteckter Text in der Ueberschrift. */
+.marke { margin: 0; line-height: 0; }
+.marke-wortmarke { display: block; height: 58px; width: auto; max-width: min(320px, 100%); object-fit: contain; object-position: left center; }
+.marke-icon { display: none; width: 40px; height: 40px; object-fit: contain; }
+.nur-vorleser {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
 h1 { margin: 0; font-size: 1.5rem; letter-spacing: 0.01em; }
 .untertitel { margin: 0; color: var(--text-leise); font-size: 0.95rem; }
+.nutzenhinweis { margin: 0; color: var(--text-leise); font-size: 0.82rem; }
 
 main { max-width: 1120px; margin: 0 auto; padding: 8px 20px 40px; }
 
@@ -164,9 +188,9 @@ main { max-width: 1120px; margin: 0 auto; padding: 8px 20px 40px; }
 }
 .upload-zone:hover, .upload-zone.drag {
   border-color: var(--akzent);
-  background: rgba(133, 180, 242, 0.06);
+  background: rgba(242, 138, 69, 0.06);
 }
-.upload-icon { width: 34px; height: 34px; color: var(--akzent); }
+.upload-icon { width: 34px; height: 34px; color: var(--brand-orange); }
 .upload-text { font-weight: 600; font-size: 1.05rem; }
 .upload-sub { color: var(--text-leise); font-size: 0.85rem; max-width: 560px; text-align: center; }
 
@@ -220,7 +244,7 @@ main { max-width: 1120px; margin: 0 auto; padding: 8px 20px 40px; }
   transition: border-color 0.15s ease, transform 0.15s ease, box-shadow 0.2s ease;
 }
 .beleg:hover {
-  border-color: rgba(133, 180, 242, 0.55);
+  border-color: rgba(242, 138, 69, 0.55);
   transform: translateY(-1px);
   box-shadow: 0 8px 22px rgba(4, 8, 16, 0.38);
 }
@@ -240,7 +264,7 @@ main { max-width: 1120px; margin: 0 auto; padding: 8px 20px 40px; }
   border: 1px solid var(--linie);
   border-left: 3px solid var(--akzent);
   border-top-color: rgba(255, 255, 255, 0.16);
-  background: linear-gradient(150deg, rgba(133, 180, 242, 0.10), rgba(133, 180, 242, 0.03));
+  background: linear-gradient(150deg, rgba(242, 138, 69, 0.10), rgba(242, 138, 69, 0.03));
   border-radius: 12px 12px 4px 4px;
   box-shadow: var(--schatten-karte);
 }
@@ -312,15 +336,35 @@ main { max-width: 1120px; margin: 0 auto; padding: 8px 20px 40px; }
   transition: border-color 0.15s ease, background 0.15s ease, filter 0.15s ease;
 }
 .btn-primaer {
-  background: linear-gradient(160deg, var(--akzent), #6a9de0);
+  background: linear-gradient(160deg, var(--brand-orange-hell), var(--brand-orange-dunkel));
   color: var(--akzent-text);
-  border-color: rgba(133, 180, 242, 0.6);
+  border-color: rgba(242, 138, 69, 0.6);
   font-weight: 600;
-  box-shadow: 0 4px 14px rgba(70, 120, 200, 0.35);
+  box-shadow: 0 4px 14px var(--brand-orange-glow);
 }
 .btn-primaer:disabled { opacity: 0.45; cursor: not-allowed; }
 .btn-sekundaer { background: rgba(255, 255, 255, 0.05); color: var(--text); }
 .btn-sekundaer:hover, .btn-primaer:not(:disabled):hover { filter: brightness(1.12); }
+
+/* Schliessen-Button mit Marken-X: Klickflaeche mindestens 44x44, sichtbares
+   Bild ~28px, exakt zentriert, Bild selbst unbearbeitet (kein Filter). */
+.schliessen-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: transparent;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+.schliessen-btn:hover { background: rgba(255, 255, 255, 0.07); border-color: rgba(242, 138, 69, 0.55); }
+.schliessen-btn img { display: block; width: 28px; height: 28px; object-fit: contain; }
+.dialog-schliessen { position: absolute; top: 8px; right: 8px; }
 
 /* ---- Detailansicht und Dialoge (Ebene 3: Modal) ----
    Wichtig: Die display:flex-Regel unten wuerde in der Kaskade die
@@ -357,7 +401,7 @@ main { max-width: 1120px; margin: 0 auto; padding: 8px 20px 40px; }
 @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
   .detail { background: var(--glas-fallback-modal); }
 }
-.dialog-klein { max-width: 420px; }
+.dialog-klein { max-width: 420px; position: relative; padding-right: 56px; }
 .dialog-aktionen { display: flex; gap: 10px; margin-top: 12px; }
 .detail-kopf { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
 .detail-kopf h3 { margin: 0; overflow-wrap: anywhere; }
@@ -366,10 +410,10 @@ main { max-width: 1120px; margin: 0 auto; padding: 8px 20px 40px; }
 .detail-status {
   margin-top: 14px;
   padding: 12px 14px;
-  border: 1px solid rgba(133, 180, 242, 0.35);
+  border: 1px solid rgba(242, 138, 69, 0.35);
   border-left: 3px solid var(--akzent);
   border-radius: 12px;
-  background: linear-gradient(150deg, rgba(133, 180, 242, 0.10), rgba(133, 180, 242, 0.02));
+  background: linear-gradient(150deg, rgba(242, 138, 69, 0.10), rgba(242, 138, 69, 0.02));
 }
 .detail-status h4 { margin: 0 0 6px; }
 
@@ -477,6 +521,8 @@ main { max-width: 1120px; margin: 0 auto; padding: 8px 20px 40px; }
 /* ---- Schmale Fenster ---- */
 @media (max-width: 600px) {
   .kopf { flex-direction: column; align-items: flex-start; }
+  .marke-wortmarke { display: none; }
+  .marke-icon { display: block; width: 36px; height: 36px; }
   h1 { font-size: 1.3rem; }
   .upload-text { font-size: 0.95rem; }
   .badge { white-space: normal; }

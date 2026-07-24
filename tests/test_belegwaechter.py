@@ -1802,5 +1802,191 @@ class Migration3Test(unittest.TestCase):
         conn.close()
 
 
+class MarkenIntegrationTest(unittest.TestCase):
+    """OptiTax-Markenintegration: oeffentlicher Produktname ist OptiTax
+    (Wortmarke im Desktop-Header, Icon fuer schmale Ansichten, orange
+    Markenfarben), interne technische Namen bleiben belegwaechter, alle
+    Referenzen lokal."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.html = (REPO_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
+        cls.js = (REPO_ROOT / "web" / "static" / "app.js").read_text(encoding="utf-8")
+        cls.css = (REPO_ROOT / "web" / "static" / "styles.css").read_text(encoding="utf-8")
+
+    def test_seitentitel_ist_optitax(self):
+        titel = re.search(r"<title>(.*?)</title>", self.html, re.DOTALL)
+        self.assertIsNotNone(titel, "index.html braucht einen <title>")
+        self.assertEqual(titel.group(1), "OptiTax – Rechnungen und Abos im Blick")
+
+    def test_kein_sichtbarer_produktname_belegwaechter_mehr(self):
+        self.assertNotIn("Belegwächter", self.html)
+        self.assertNotIn("Belegwächter", self.js)
+
+    def test_lokales_favicon_und_touch_icon_eingebunden(self):
+        self.assertIn('rel="icon" href="/assets/brand/optitax-favicon.ico"', self.html)
+        self.assertIn('rel="apple-touch-icon" href="/assets/brand/optitax-icon-192.png"', self.html)
+        self.assertNotIn("data:image/svg", self.html, "Das alte Inline-SVG-Favicon muss ersetzt sein")
+
+    def test_wortmarke_im_desktop_header_und_icon_fuer_schmale_ansicht(self):
+        kopf = re.search(r"<header.*?</header>", self.html, re.DOTALL)
+        self.assertIsNotNone(kopf)
+        self.assertIn('src="/assets/brand/optitax-wordmark.png"', kopf.group(0))
+        self.assertIn('src="/assets/brand/optitax-icon-64.png"', kopf.group(0))
+        # Schmale Ansicht: Wortmarke weicht dem Icon (CSS-Umschaltung).
+        self.assertIn(".marke-wortmarke { display: none; }", self.css)
+        self.assertIn(".marke-icon { display: block;", self.css)
+        # Der alte Schild-Pfad (M12 2 4 5 ...) darf nirgends mehr vorkommen.
+        self.assertNotIn("M12 2 4 5", self.html, "Altes Schildsymbol muss entfernt sein")
+
+    def test_zugaenglicher_markenname_und_untertitel_als_html_text(self):
+        # Kein doppeltes O: keine ausgeschriebene sichtbare Ueberschrift neben
+        # der Wortmarke, aber ein zugaenglicher Textname in der h1.
+        self.assertIn('<span class="nur-vorleser">OptiTax</span>', self.html)
+        self.assertIn("Rechnungen und Abos im Blick.", self.html)
+        self.assertIn("Belege und Kostennachweise rein, geprüfte Übersicht raus.", self.html)
+
+    def test_footer_verwendet_optitax(self):
+        self.assertIn("OptiTax — lokal, ohne externe Dienste.", self.html)
+
+    def test_csv_export_heisst_optitax_export(self):
+        self.assertIn('"optitax_export.csv wird heruntergeladen …"', self.js)
+        server_py = (REPO_ROOT / "web" / "server.py").read_text(encoding="utf-8")
+        self.assertIn('filename="optitax_export.csv"', server_py)
+        self.assertNotIn("belegwaechter_export.csv", server_py)
+
+    def test_brand_variablen_definiert_und_verwendet(self):
+        for var in ("--brand-orange-hell", "--brand-orange", "--brand-orange-dunkel",
+                    "--brand-orange-glow", "--brand-focus"):
+            self.assertIn(f"{var}:", self.css, f"Brand-Variable {var} fehlt")
+        btn = re.search(r"\.btn-primaer \{.*?\}", self.css, re.DOTALL)
+        self.assertIsNotNone(btn)
+        self.assertIn("var(--brand-orange-hell)", btn.group(0))
+        self.assertIn("var(--brand-orange-dunkel)", btn.group(0))
+        upload = re.search(r"\.upload-icon \{.*?\}", self.css, re.DOTALL)
+        self.assertIsNotNone(upload)
+        self.assertIn("var(--brand-orange", upload.group(0))
+
+    def test_keine_alten_blauen_primaerwerte_mehr(self):
+        for alt in ("#85b4f2", "#6a9de0", "#8ab8f8", "#2a4f86", "rgba(133, 180, 242"):
+            self.assertNotIn(alt, self.css, f"Alter blauer Markenwert {alt} verbleibt in styles.css")
+
+    def test_semantische_statusfarben_bleiben_getrennt(self):
+        # Erfolg gruen, Review/Warnung gelb, Dublette grau -- unveraendert.
+        self.assertIn("--gruen-bg: rgba(72, 190, 120, 0.16); --gruen-text: #93e2ad;", self.css)
+        self.assertIn("--gelb-bg: rgba(238, 195, 90, 0.15); --gelb-text: #f2d489;", self.css)
+        self.assertIn("--grau-bg: rgba(165, 180, 200, 0.13); --grau-text: #bcc7d5;", self.css)
+        # "Original angefordert" bleibt neutral (Silber), nicht Markenorange.
+        blau = re.search(r"--blau-bg: ([^;]+);", self.css)
+        self.assertIsNotNone(blau)
+        self.assertNotIn("242, 138, 69", blau.group(1))
+
+    def test_optitax_asset_dateien_vollstaendig(self):
+        brand_dir = REPO_ROOT / "web" / "static" / "assets" / "brand"
+        namen = [p.name for p in brand_dir.iterdir()]
+        self.assertEqual(
+            sorted(namen),
+            [
+                "optitax-close-x-24.png",
+                "optitax-close-x-32.png",
+                "optitax-favicon.ico",
+                "optitax-icon-192.png",
+                "optitax-icon-512.png",
+                "optitax-icon-64.png",
+                "optitax-wordmark.png",
+            ],
+        )
+
+    def test_schliessen_buttons_nutzen_grosses_x_mit_labels(self):
+        for button_id in ("detail-schliessen", "reset-schliessen"):
+            treffer = re.search(rf'<button id="{button_id}".*?</button>', self.html, re.DOTALL)
+            self.assertIsNotNone(treffer, f"Button {button_id} fehlt in index.html")
+            block = treffer.group(0)
+            self.assertIn('aria-label="Schließen"', block)
+            self.assertIn('title="Schließen"', block)
+            self.assertIn('src="/assets/brand/optitax-close-x-32.png"', block)
+            self.assertIn('width="28" height="28"', block)
+
+    def test_schliessen_klickflaeche_mindestens_44_pixel(self):
+        btn = re.search(r"\.schliessen-btn \{.*?\}", self.css, re.DOTALL)
+        self.assertIsNotNone(btn)
+        self.assertIn("width: 44px;", btn.group(0))
+        self.assertIn("height: 44px;", btn.group(0))
+        self.assertIn(".schliessen-btn img { display: block; width: 28px; height: 28px;", self.css)
+
+    def test_destruktive_aktionen_nutzen_kein_marken_x(self):
+        # Der bestaetigende Reset-Button und der Abbrechen-Button bleiben
+        # Textbuttons ohne Markensymbol.
+        for button_id in ("reset-ja", "reset-nein"):
+            treffer = re.search(rf'<button id="{button_id}".*?</button>', self.html, re.DOTALL)
+            self.assertIsNotNone(treffer)
+            self.assertNotIn("optitax-close-x", treffer.group(0))
+
+    def test_detail_schliesst_per_button_und_esc(self):
+        self.assertIn('$("detail-schliessen").addEventListener("click", detailSchliessen)', self.js)
+        self.assertIn('if (e.key === "Escape")', self.js)
+        self.assertIn('if (!$("detail-overlay").hidden) detailSchliessen();', self.js)
+
+    def test_reset_dialog_schliesst_per_abbrechen_esc_x_und_reset(self):
+        self.assertIn('$("reset-nein").addEventListener("click", () => { $("reset-overlay").hidden = true; })', self.js)
+        self.assertIn('$("reset-schliessen").addEventListener("click", () => { $("reset-overlay").hidden = true; })', self.js)
+        self.assertIn('if (!$("reset-overlay").hidden) $("reset-overlay").hidden = true;', self.js)
+        # Erfolgreicher Reset blendet den Dialog ebenfalls aus.
+        reset_ja = re.search(r'\$\("reset-ja"\).addEventListener\(.*?ladeAlles\(\);\s*\}\);', self.js, re.DOTALL)
+        self.assertIsNotNone(reset_ja)
+        self.assertIn('$("reset-overlay").hidden = true;', reset_ja.group(0))
+
+    def test_keine_externen_urls_oder_absolute_private_pfade(self):
+        for name, inhalt in (("index.html", self.html), ("app.js", self.js), ("styles.css", self.css)):
+            self.assertNotIn("https://", inhalt, f"{name} darf keine externen URLs enthalten")
+            self.assertNotIn("http://", inhalt, f"{name} darf keine externen URLs enthalten")
+            self.assertNotRegex(inhalt, r"[A-Za-z]:\\", f"{name} darf keine absoluten Windows-Pfade enthalten")
+            self.assertNotIn("C:/", inhalt, f"{name} darf keine absoluten Windows-Pfade enthalten")
+
+
+class MarkenAssetRouteTest(HttpTestCase):
+    """Die OptiTax-Marken-Assets werden lokal unter /assets/brand/ mit
+    korrektem Content-Type ausgeliefert."""
+
+    def test_marken_assets_liefern_http_200(self):
+        erwartet = {
+            "optitax-wordmark.png": "image/png",
+            "optitax-icon-512.png": "image/png",
+            "optitax-icon-192.png": "image/png",
+            "optitax-icon-64.png": "image/png",
+            "optitax-favicon.ico": "image/x-icon",
+            "optitax-close-x-24.png": "image/png",
+            "optitax-close-x-32.png": "image/png",
+        }
+        for name, content_type in erwartet.items():
+            conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=10)
+            conn.request("GET", f"/assets/brand/{name}", headers={"Content-Length": "0"})
+            resp = conn.getresponse()
+            daten = resp.read()
+            conn.close()
+            self.assertEqual(resp.status, 200, name)
+            self.assertEqual(resp.getheader("Content-Type"), content_type, name)
+            self.assertGreater(len(daten), 500, f"{name} sollte kein leerer Platzhalter sein")
+
+    def test_csv_download_heisst_optitax_export(self):
+        conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=10)
+        conn.request("GET", "/api/export.csv")
+        resp = conn.getresponse()
+        resp.read()
+        conn.close()
+        self.assertEqual(resp.status, 200)
+        self.assertIn('filename="optitax_export.csv"', resp.getheader("Content-Disposition", ""))
+
+    def test_brand_route_erlaubt_kein_traversal(self):
+        for pfad in (
+            "/assets/brand/../server.py",
+            "/assets/brand/..",
+            "/assets/brand/unterordner/datei.png",
+            "/assets/anderer-ordner/datei.png",
+        ):
+            status, _ = self._senden("GET", pfad, host=f"127.0.0.1:{self.port}")
+            self.assertEqual(status, 404, pfad)
+
+
 if __name__ == "__main__":
     unittest.main()

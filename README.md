@@ -1,9 +1,13 @@
-# Belegwächter — SKAILE Building Challenge #2
+# OptiTax — SKAILE Building Challenge #2
+
+> Öffentlicher Produktname: **OptiTax**. Der interne technische Name des
+> Python-Pakets, der Datenbank und der Module bleibt aus
+> Stabilitätsgründen `belegwaechter`.
 
 > Stand Arbeitsblock 4 (23.07.2026): End-to-End-Vertical-Slice läuft,
 > jetzt inklusive EML-Upload. Zentrale, manuelle Kosten-Inbox: Belege und
-> heruntergeladene Rechnungs-E-Mails werden manuell zugeführt. Der
-> Belegwächter ist ein regelbasierter, zustandsabhängiger Agent. Er
+> heruntergeladene Rechnungs-E-Mails werden manuell zugeführt.
+> OptiTax ist ein regelbasierter, zustandsabhängiger Agent. Er
 > erstellt pro Eingang einen Ausführungsplan, wählt notwendige
 > Prüfwerkzeuge, überspringt ungeeignete Schritte, verbindet die Dokumente
 > einer E-Mail zu einem Kostenvorgang und entscheidet anhand von Evidenz
@@ -18,8 +22,8 @@ Aufräumen Stunden und Nerven.
 
 ## Was der Agent macht
 
-Belege und Kostennachweise aus unterschiedlichen Quellen hinein. Der
-Belegwächter prüft, ordnet und verfolgt sie selbstständig bis zum
+Belege und Kostennachweise aus unterschiedlichen Quellen hinein.
+OptiTax prüft, ordnet und verfolgt sie selbstständig bis zum
 nachvollziehbaren Monatspaket: Datei erkennen, Quellenqualität bewerten,
 bei PDFs die Felder lesen, fail-closed auf Vollständigkeit prüfen, gegen den
 Bestand abgleichen (Dublette? bekanntes Abo? Preis eindeutig vergleichbar?)
@@ -89,7 +93,7 @@ nie aus dem Rohtext des Dokuments.
 
 ## Warum das ein Agent ist, kein Parser
 
-Der Belegwächter erstellt pro Eingang einen echten Ausführungsplan
+OptiTax erstellt pro Eingang einen echten Ausführungsplan
 (`belegwaechter/planen.py`): abhängig von Quellenklasse und Dateisignatur
 wählt er, welche Werkzeuge laufen (Extraktion, Checkliste, Bestandsabgleich,
 Abo-Radar) und welche übersprungen werden, jeweils mit Begründung. Neue
@@ -138,7 +142,7 @@ Ehrliche Abgrenzung zur Vorarbeit:
   und Testmuster (Auditlog mit alt/neu-Zustand, Provenienz-Verweise,
   fail-closed Validierung, Review-Bucket, Test-Isolation mit Temp-DB).
   Bisher wurde kein Optifyx-Code übernommen; alles wird neu geschrieben.
-- **Entsteht neu in der Challenge:** Der komplette Belegwächter,
+- **Entsteht neu in der Challenge:** Der komplette OptiTax-Agent,
   ausschließlich in diesem Repository, nachvollziehbar über die
   Commit-Historie ab 23.07.2026.
 

@@ -1988,5 +1988,215 @@ class MarkenAssetRouteTest(HttpTestCase):
             self.assertEqual(status, 404, pfad)
 
 
+class SteuerzeichenTest(unittest.TestCase):
+    """Zentrale Normalisierung: C0-Steuerzeichen (z.B. NUL-Spaltentrenner aus
+    einer PDF-Textebene) erreichen keine Feldwerte; mittige Steuerzeichen
+    werden zum sichtbaren Trenner statt Werte kommentarlos zu verkleben."""
+
+    def test_datumsbereich_mit_nullzeichen_wird_sichtbarer_bereich(self):
+        felder = extrahieren.felder_aus_text(
+            "Beispiel Dienste AG\nLeistungszeitraum: 01.07.2026\x0031.07.2026\nBetrag: 12,00 EUR"
+        )
+        zeitraum = felder["zeitraum"].wert
+        self.assertIsNotNone(zeitraum)
+        self.assertNotIn("\x00", zeitraum)
+        self.assertIn("01.07.2026", zeitraum)
+        self.assertIn("31.07.2026", zeitraum)
+        self.assertIn("-", zeitraum, "Der Bereich braucht einen sichtbaren Trenner")
+
+    def test_referenz_mit_nullzeichen_erhaelt_normalen_trenner(self):
+        felder = extrahieren.felder_aus_text(
+            "Beispiel Dienste AG\nRechnungsnummer: RE\x00471\nBetrag: 12,00 EUR"
+        )
+        self.assertEqual(felder["referenz"].wert, "RE-471")
+
+    def test_feldwert_bereinigen_regeln(self):
+        from belegwaechter import steuerzeichen
+
+        self.assertEqual(steuerzeichen.feldwert_bereinigen("RE\x00471"), "RE-471")
+        self.assertEqual(steuerzeichen.feldwert_bereinigen("a \x00 b"), "a b")
+        self.assertEqual(steuerzeichen.feldwert_bereinigen("a\tb\nc"), "a b c")
+        self.assertIsNone(steuerzeichen.feldwert_bereinigen("\x00\x01"))
+        self.assertIsNone(steuerzeichen.feldwert_bereinigen(None))
+        self.assertIsNone(steuerzeichen.feldwert_bereinigen("   "))
+
+    def test_flusstext_erhaelt_zeilenumbrueche(self):
+        from belegwaechter import steuerzeichen
+
+        self.assertEqual(
+            steuerzeichen.flusstext_bereinigen("Zeile1\nZei\x00le2\x07"),
+            "Zeile1\nZei-le2",
+        )
+
+
+class SteuerzeichenApiTest(HttpTestCase):
+    """Defensive Bereinigung beim Lesen: auch ein VOR der zentralen
+    Normalisierung persistierter Altbestand mit Steuerzeichen verlaesst den
+    Server nie ueber API oder CSV -- ohne neue Migration."""
+
+    _C0_VERBOTEN = set(range(0, 9)) | {11, 12} | set(range(14, 32))
+
+    def _altbestand_mit_steuerzeichen_einfuegen(self) -> None:
+        conn = speicher.verbindung()
+        conn.execute("INSERT INTO laeufe (id, gestartet_am) VALUES ('lauf-c0', datetime('now'))")
+        felder_json = json.dumps(
+            {
+                "anbieter": {"wert": "Beispiel Dienste AG", "herkunft": "aus PDF-Text"},
+                "datum": {"wert": "01.07.2026", "herkunft": "aus PDF-Text"},
+                "betrag": {"wert": "12,00", "herkunft": "aus PDF-Text"},
+                "waehrung": {"wert": "EUR", "herkunft": "aus PDF-Text"},
+                "zeitraum": {"wert": "01.07.2026\x0031.07.2026", "herkunft": "aus PDF-Text"},
+                "tarif": {"wert": None, "herkunft": "fehlt"},
+                "referenz": {"wert": "RE\x00471", "herkunft": "aus PDF-Text"},
+            },
+            ensure_ascii=False,
+        )
+        conn.execute(
+            """
+            INSERT INTO belege (
+                id, lauf_id, dateiname, dateihash, dateipfad, dateityp, stufe,
+                quellenstatus, anbieter, anbieter_schluessel, datum, betrag,
+                waehrung, zeitraum, referenz, felder_json, checkliste_json,
+                ausgang, begruendung, dokumentstatus, reviewstatus,
+                baseline_bestaetigt, betrag_dezimal, dokumentart, erfasst_am
+            ) VALUES (
+                'beleg-c0', 'lauf-c0', 'alt.pdf', 'hash-c0', '', 'PDF', 'A',
+                'original_vorhanden', 'Beispiel Dienste AG', 'beispiel dienste ag',
+                '01.07.2026', '12,00', 'EUR', ?,
+                ?, ?, '[]', 'uebernommen',
+                'Alt gespeicherter Beleg.', 'vorbereitet', 'keine',
+                1, '12.00', 'rechnung', datetime('now')
+            )
+            """,
+            ("01.07.2026\x0031.07.2026", "RE\x00471", felder_json),
+        )
+        conn.commit()
+        conn.close()
+
+    def _c0_pruefen(self, rohbytes: bytes, quelle: str) -> None:
+        gefunden = sorted({b for b in rohbytes if b in self._C0_VERBOTEN})
+        self.assertEqual(gefunden, [], f"C0-Steuerzeichen in {quelle}: {gefunden}")
+
+    def test_api_und_csv_sind_frei_von_steuerzeichen(self):
+        self._altbestand_mit_steuerzeichen_einfuegen()
+
+        status, body = self._senden("GET", "/api/ergebnis", host=f"127.0.0.1:{self.port}")
+        self.assertEqual(status, 200)
+        self._c0_pruefen(body, "/api/ergebnis")
+        self.assertNotIn(b"\\u0000", body)
+        daten = json.loads(body)
+        beleg = daten["belege"][0]
+        self.assertEqual(beleg["felder"]["referenz"]["wert"], "RE-471")
+        self.assertEqual(beleg["felder"]["zeitraum"]["wert"], "01.07.2026-31.07.2026")
+
+        status, csv_body = self._senden("GET", "/api/export.csv", host=f"127.0.0.1:{self.port}")
+        self.assertEqual(status, 200)
+        ohne_zeilenenden = csv_body.replace(b"\r", b"").replace(b"\n", b"")
+        self._c0_pruefen(ohne_zeilenenden, "/api/export.csv")
+        text = csv_body.decode("utf-8")
+        self.assertIn("01.07.2026-31.07.2026", text, "Zeitraum braucht einen sichtbaren Trenner")
+        self.assertIn("RE-471", text)
+
+    def test_csv_formelschutz_bleibt_nach_normalisierung_erhalten(self):
+        from web.server import _csv_text
+
+        self.assertEqual(_csv_text("=SUMME(A1)"), "'=SUMME(A1)")
+        self.assertEqual(_csv_text("\x00=SUMME(A1)"), "'=SUMME(A1)")
+        self.assertEqual(_csv_text("a\x00b"), "a-b")
+
+
+class AnbieterFallbackTest(unittest.TestCase):
+    """Anbietererkennung: Datums-, Faelligkeits-, Betrags-, Zeitraum- und
+    generische Titelzeilen sind nie ein Anbieter; ohne belastbare
+    Organisationszeile greift transparent der E-Mail-Absender."""
+
+    def test_faelligkeitszeile_wird_nie_anbieter_absender_ist_fallback(self):
+        felder = extrahieren.felder_aus_text(
+            "Fällig am 15.08.2026\nRechnung Nr. RE-77\nBetrag: 12,00 EUR\n01.08.2026\nSeite 1 von 1",
+            absender_fallback="Beispiel Software GmbH <billing@beispiel.invalid>",
+        )
+        self.assertEqual(felder["anbieter"].wert, "Beispiel Software GmbH")
+        self.assertEqual(felder["anbieter"].herkunft, "aus E-Mail-Absender")
+
+    def test_gesperrte_zeilen_sind_keine_anbieter(self):
+        for zeile in (
+            "01.08.2026",
+            "5. August 2026",
+            "Aug 1, 2026",
+            "01.07.2026 - 31.07.2026",
+            "12,00 EUR",
+            "€ 12,00",
+            "Fällig am 15.08.2026",
+            "Due on Aug 1, 2026",
+            "Bezahlt am 01.08.2026",
+            "Paid on Aug 1, 2026",
+            "Rechnung",
+            "Invoice",
+            "Zahlungsbeleg",
+            "Receipt",
+            "Abo-Bestätigung",
+            "Deine Rechnung von Beispiel",
+            "Your invoice from Beispiel",
+            "Rechnung Nr. RE-1",
+        ):
+            felder = extrahieren.felder_aus_text(zeile)
+            self.assertIsNone(
+                felder["anbieter"].wert, f"Zeile {zeile!r} darf nie Anbieter werden"
+            )
+            self.assertEqual(felder["anbieter"].herkunft, "fehlt")
+
+    def test_echte_organisationszeile_bleibt_anbieter(self):
+        felder = extrahieren.felder_aus_text(
+            "Beispiel Software GmbH\nRechnung Nr. RE-77\nBetrag: 12,00 EUR",
+            absender_fallback="Anderer Absender <x@beispiel.invalid>",
+        )
+        self.assertEqual(felder["anbieter"].wert, "Beispiel Software GmbH")
+        self.assertEqual(felder["anbieter"].herkunft, "aus PDF-Text")
+
+
+class RechnungVsAboTest(unittest.TestCase):
+    """Evidenzreihenfolge Rechnung vs. Abo-Bestaetigung: ein explizites
+    Rechnungsmerkmal (Titel, Rechnungsnummer, Rechnungsdatum) schlaegt einen
+    beilaeufigen Verlaengerungshinweis; eine reine Bestaetigung ohne
+    Rechnungsmerkmale bleibt Abo-Bestaetigung."""
+
+    def test_betreff_deine_rechnung_gewinnt_gegen_verlaengerung_im_mailtext(self):
+        art, begruendung = dokumentart.klassifizieren(
+            "",
+            dateiname="anhang.pdf",
+            betreff="Deine Rechnung von Beispiel",
+            mailtext="Betrag: 9,00 EUR\nRechnungsdatum: 01.08.2026\nIhr Abo verlängert sich automatisch.",
+        )
+        self.assertEqual(art, "rechnung")
+        self.assertIn("E-Mail-Betreff", begruendung)
+
+    def test_mailtext_mit_rechnungsmerkmalen_und_verlaengerung_ist_rechnung(self):
+        art, begruendung = dokumentart.klassifizieren(
+            "Deine Rechnung von Beispiel\n"
+            "Betrag: 9,00 EUR\nRechnungsdatum: 01.08.2026\n"
+            "Ihr Abo verlängert sich automatisch."
+        )
+        self.assertEqual(art, "rechnung")
+        self.assertIn("Vorrang", begruendung)
+
+    def test_reine_abo_bestaetigung_bleibt_abo(self):
+        art, _ = dokumentart.klassifizieren(
+            "Ihr Abo verlängert sich am 01.09.2026. Der Betrag wird automatisch abgebucht."
+        )
+        self.assertEqual(art, "abo_bestaetigung")
+
+    def test_abo_bestaetigung_mit_beilaeufigem_rechnungswort_bleibt_abo(self):
+        art, _ = dokumentart.klassifizieren(
+            "Ihr Abo verlängert sich am 01.09.2026. Rechnung folgt."
+        )
+        self.assertEqual(art, "abo_bestaetigung")
+
+    def test_zahlungsbeleg_bleibt_getrennt(self):
+        art, _ = dokumentart.klassifizieren(
+            "Zahlung erhalten\nRechnungsnummer: RE-1\nIhr Abo verlängert sich."
+        )
+        self.assertEqual(art, "zahlungsbeleg")
+
+
 if __name__ == "__main__":
     unittest.main()

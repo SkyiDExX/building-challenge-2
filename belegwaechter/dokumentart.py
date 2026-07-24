@@ -19,6 +19,8 @@ es ein sonstiger Kostennachweis; sonst endet die Einordnung fail-closed bei
 """
 from __future__ import annotations
 
+import re
+
 from belegwaechter.modelle import (
     DOKUMENTART_ABO_BESTAETIGUNG,
     DOKUMENTART_RECHNUNG,
@@ -47,6 +49,23 @@ _ABO_WOERTER = (
 )
 _RECHNUNG_WOERTER = ("rechnung", "invoice")
 
+# Explizite Rechnungsmerkmale: ein Dokumenttitel ("Rechnung", "Deine
+# Rechnung von ...") oder Rechnungsfelder (Rechnungsnummer, Rechnungsdatum).
+# Ein solches Merkmal hat Vorrang vor einem beilaeufigen
+# Verlaengerungshinweis ("Ihr Abo verlaengert sich") in derselben Quelle.
+# Bewusst eng: "Rechnung folgt." oder "Rechnung im Anhang" sind KEINE
+# Titel und KEINE Rechnungsfelder -- eine reine Ankuendigung bleibt
+# Abo-Bestaetigung.
+_RECHNUNG_EXPLIZIT_MUSTER = re.compile(
+    r"(?:^|\n)\s*(?:deine|ihre|your)?\s*(?:rechnung|invoice)\s*(?:$|\n)"
+    r"|(?:^|\n)\s*(?:deine|ihre)\s+rechnung\s+von\b"
+    r"|(?:^|\n)\s*your\s+invoice\s+from\b"
+    r"|\brechnungs\s*(?:nummer|datum|nr\.?)\b"
+    r"|\brechnung\s+nr\.?\b"
+    r"|\binvoice\s+(?:number|no\.?|date)\b",
+    re.IGNORECASE,
+)
+
 
 def _cascade(quelle: str) -> tuple[str, str] | None:
     """Prueft eine einzelne Evidenzquelle gegen die feste
@@ -64,6 +83,12 @@ def _cascade(quelle: str) -> tuple[str, str] | None:
             )
     for wort in _ABO_WOERTER:
         if wort in klein:
+            if _RECHNUNG_EXPLIZIT_MUSTER.search(quelle):
+                return (
+                    DOKUMENTART_RECHNUNG,
+                    "explizites Rechnungsmerkmal (Titel oder Rechnungsfeld) hat "
+                    f"Vorrang vor dem beiläufigen Verlängerungshinweis '{wort}'",
+                )
             return (
                 DOKUMENTART_ABO_BESTAETIGUNG,
                 f"Schlüsselwort '{wort}' gefunden",
@@ -86,10 +111,17 @@ def klassifizieren(
     Dokuments (PDF-Anhang oder Mailtext-Beleg) und hat immer Vorrang vor
     Dateiname und E-Mail-Betreff/-Text."""
     try:
+        # Feste Evidenzreihenfolge: eigener Textinhalt (inkl. explizitem
+        # Dokumenttitel) vor Dateiname vor E-Mail-Betreff vor den uebrigen
+        # Schluesselwoertern im Mailtext. Betreff und Mailtext sind bewusst
+        # getrennte Stufen: ein expliziter Betreff-Titel wie "Deine Rechnung
+        # von ..." gewinnt gegen einen beilaeufigen Verlaengerungssatz, der
+        # nur irgendwo im Mailtext steht.
         for quelle, bezeichnung in (
             (text, "Textinhalt des Dokuments"),
             (dateiname, "Dateiname"),
-            (f"{betreff or ''}\n{mailtext or ''}", "E-Mail-Betreff/-Text, Fallback"),
+            (betreff, "E-Mail-Betreff, Fallback"),
+            (mailtext, "E-Mail-Text, Fallback"),
         ):
             treffer = _cascade(quelle)
             if treffer:

@@ -19,6 +19,7 @@ import re
 
 from pypdf import PdfReader
 
+from belegwaechter import steuerzeichen
 from belegwaechter.modelle import FELDNAMEN, ExtrahiertesFeld
 
 # Volle UND uebliche dreibuchstabige Abkuerzungen, deterministisch als feste
@@ -92,14 +93,23 @@ _MUSTER = {
 }
 
 # Zeilen, die sicher KEIN Anbietername sind: Seitenfusszeilen (koennen am
-# Dokumentanfang oder -ende stehen, Position ist vorlagenabhaengig) und
-# blanke Dokumentart-Woerter ohne Organisationsbezug.
+# Dokumentanfang oder -ende stehen, Position ist vorlagenabhaengig),
+# blanke Dokumentart-Woerter und generische Dokumentueberschriften ohne
+# Organisationsbezug, reine Datums-/Betrags-/Zeitraumzeilen sowie
+# Faelligkeits- und Zahlungszeilen.
 _FUSSZEILE_MUSTER = re.compile(
     r"^(?:seite\s*\d+\s*(?:von|/)\s*\d+|page\s*\d+\s*of\s*\d+|\d+\s*of\s*\d+)$",
     re.IGNORECASE,
 )
 _DOKUMENTART_WORT_MUSTER = re.compile(
-    r"^(?:rechnung|invoice|zahlungsbeleg|receipt|payment\s+receipt|quittung)$",
+    r"^(?:rechnung|invoice|zahlungsbeleg|receipt|payment\s+receipt|quittung"
+    r"|abo-?best(?:ä|ae)tigung|subscription\s+confirmation)$",
+    re.IGNORECASE,
+)
+_DOKUMENT_TITEL_MUSTER = re.compile(
+    r"^(?:deine|ihre|your)\s+(?:rechnung|invoice|zahlungsbest(?:ä|ae)tigung"
+    r"|abo-?best(?:ä|ae)tigung|receipt)\b"
+    r"|^(?:rechnung|invoice)\s+(?:nr|no|number|von|from|f(?:ü|ue)r|for)\b",
     re.IGNORECASE,
 )
 _LABEL_ZEILE_MUSTER = re.compile(
@@ -107,6 +117,16 @@ _LABEL_ZEILE_MUSTER = re.compile(
     rf"|Leistungszeitraum|Tarif|Waehrung)\s*[:.]?",
     re.IGNORECASE,
 )
+_FAELLIGKEIT_ZEILE_MUSTER = re.compile(
+    r"^(?:f(?:ä|ae)llig\s+am|due\s+(?:on|by|date)|bezahlt\s+am|paid\s+on)\b",
+    re.IGNORECASE,
+)
+_DATUM_WERT = rf"(?:{_WERT_DATUM_DE_NUMERISCH}|{_WERT_DATUM_DE_AUSGESCHRIEBEN}|{_WERT_DATUM_EN})"
+_DATUM_ZEILE_MUSTER = re.compile(rf"^{_DATUM_WERT}$", re.IGNORECASE)
+_ZEITRAUM_ZEILE_MUSTER = re.compile(
+    rf"^{_DATUM_WERT}\s*{_ZEITRAUM_TRENNER}\s*{_DATUM_WERT}$", re.IGNORECASE
+)
+_BETRAG_ZEILE_MUSTER = re.compile(r"^[€$£]?\s*\d[\d.,\s]*\s*(?:[€$£]|[A-Z]{3})?$")
 
 
 def pdf_text_lesen(pdf_pfad: str) -> str:
@@ -168,17 +188,31 @@ def _bereinigter_absender(absender: str) -> str | None:
 
 
 def _anbieter_kandidat(zeilen: list[str]) -> str | None:
-    """Erste Zeile, die keine Seitenfusszeile, kein blankes Dokumentart-Wort
-    und keine erkannte Label:Wert-Zeile ist. Fusszeilen und Organisations-
-    zeile koennen je nach Vorlage an unterschiedlichen Positionen stehen
-    (siehe docs/FEASIBILITY_INPUTS.md); es wird deshalb nie einfach 'erste
-    Zeile' angenommen, sondern aktiv nach Nicht-Kandidaten gefiltert."""
+    """Erste Zeile, die keine Seitenfusszeile, kein blankes Dokumentart-Wort,
+    keine generische Dokumentueberschrift, keine erkannte Label:Wert-Zeile,
+    keine Faelligkeits-/Zahlungszeile und keine reine Datums-, Zeitraum-
+    oder Betragszeile ist. Fusszeilen und Organisationszeile koennen je nach
+    Vorlage an unterschiedlichen Positionen stehen (siehe
+    docs/FEASIBILITY_INPUTS.md); es wird deshalb nie einfach 'erste Zeile'
+    angenommen, sondern aktiv nach Nicht-Kandidaten gefiltert. Bleibt keine
+    belastbare Organisationszeile uebrig, liefert der Aufrufer den
+    bereinigten E-Mail-Absender als transparent gekennzeichneten Fallback."""
     for zeile in zeilen:
         if _FUSSZEILE_MUSTER.match(zeile):
             continue
         if _DOKUMENTART_WORT_MUSTER.match(zeile):
             continue
+        if _DOKUMENT_TITEL_MUSTER.match(zeile):
+            continue
         if _LABEL_ZEILE_MUSTER.match(zeile):
+            continue
+        if _FAELLIGKEIT_ZEILE_MUSTER.match(zeile):
+            continue
+        if _DATUM_ZEILE_MUSTER.match(zeile):
+            continue
+        if _ZEITRAUM_ZEILE_MUSTER.match(zeile):
+            continue
+        if _BETRAG_ZEILE_MUSTER.match(zeile):
             continue
         return zeile
     return None
@@ -193,6 +227,11 @@ def felder_aus_text(
     E-Mail-From-Header) wird nur verwendet, wenn im Dokumenttext selbst
     keine belastbare Organisationszeile gefunden wird -- die Herkunft
     lautet dann transparent 'aus E-Mail-Absender', nicht 'aus PDF-Text'."""
+    # Zentrale Steuerzeichen-Normalisierung VOR jeder Mustersuche: kein
+    # extrahierter Wert kann danach noch C0-Zeichen enthalten, und ein
+    # NUL-Spaltentrenner (z.B. mitten in einem Datumsbereich) wird zum
+    # sichtbaren Bindestrich statt die Teile kommentarlos zu verkleben.
+    text = steuerzeichen.flusstext_bereinigen(text)
     zeilen = [z.strip() for z in text.splitlines() if z.strip()]
     ergebnis: dict[str, ExtrahiertesFeld] = {}
 
@@ -258,6 +297,12 @@ def felder_aus_text(
 
     for name in FELDNAMEN:
         ergebnis.setdefault(name, ExtrahiertesFeld(name, None, "fehlt"))
+    # Netz auf Feldwert-Ebene: kollabiert Rest-Whitespace und faengt jeden
+    # Weg ab, auf dem doch noch ein Steuerzeichen in einen Wert gelangt.
+    for feld in ergebnis.values():
+        feld.wert = steuerzeichen.feldwert_bereinigen(feld.wert)
+        if feld.wert is None and feld.herkunft != "fehlt":
+            feld.herkunft = "fehlt"
     return ergebnis
 
 

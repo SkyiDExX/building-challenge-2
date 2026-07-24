@@ -23,7 +23,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
-from belegwaechter import agent, speicher  # noqa: E402
+from belegwaechter import agent, speicher, steuerzeichen  # noqa: E402
 from belegwaechter.fehlertexte import bereinigen  # noqa: E402
 
 HOST = "127.0.0.1"
@@ -77,8 +77,20 @@ def _rumpf_verwerfen(rfile, laenge: int) -> None:
         rest -= len(stueck)
 
 
+def _api_text(wert):
+    """Defensive Bereinigung beim Ausliefern: bestehende, vor der zentralen
+    Steuerzeichen-Normalisierung persistierte Werte werden beim Lesen
+    bereinigt (keine Migration noetig). None bleibt None."""
+    if not isinstance(wert, str):
+        return wert
+    return steuerzeichen.feldwert_bereinigen(wert) or ""
+
+
 def _beleg_zu_json(row: dict, plaene: list[dict]) -> dict:
     felder = json.loads(row["felder_json"])
+    for feld in felder.values():
+        if feld.get("wert") is not None:
+            feld["wert"] = steuerzeichen.feldwert_bereinigen(feld["wert"])
     checkliste = json.loads(row["checkliste_json"])
     return {
         "id": row["id"],
@@ -92,14 +104,14 @@ def _beleg_zu_json(row: dict, plaene: list[dict]) -> dict:
         "felder": felder,
         "checkliste": checkliste,
         "ausgang": row["ausgang"],
-        "begruendung": bereinigen(row["begruendung"]),
+        "begruendung": _api_text(bereinigen(row["begruendung"])),
         "dokumentart": row["dokumentart"],
         "vorgang_id": row["vorgang_id"],
         "dokumentstatus": row["dokumentstatus"],
         "reviewstatus": row["reviewstatus"],
-        "review_aufgabe": row["review_aufgabe"],
+        "review_aufgabe": _api_text(row["review_aufgabe"]),
         "radar_einschaetzung": row["radar_einschaetzung"],
-        "radar_begruendung": row["radar_begruendung"],
+        "radar_begruendung": _api_text(row["radar_begruendung"]),
         "erfasst_am": row["erfasst_am"],
         "plaene": [p["plan"] for p in plaene],
     }
@@ -112,8 +124,8 @@ def _vorgang_zu_json(row: dict) -> dict:
         "quelle": row["quelle"],
         "eml_dateiname": row["eml_dateiname"],
         "eml_hash": row["eml_hash"],
-        "betreff": row["betreff"],
-        "absender": row["absender"],
+        "betreff": _api_text(row["betreff"]),
+        "absender": _api_text(row["absender"]),
         "mail_datum": row["mail_datum"],
         "naechste_aktivitaet_art": row["naechste_aktivitaet_art"],
         "naechste_aktivitaet_status": row["naechste_aktivitaet_status"],
@@ -190,6 +202,11 @@ def _zugriff_erlaubt(handler: "BelegwaechterHandler", veraendernd: bool) -> tupl
 
 def _csv_text(wert) -> str:
     text = "" if wert is None else str(wert)
+    # Erst Steuerzeichen normalisieren (defensiv auch fuer Altbestand),
+    # DANN der Formelschutz -- die Reihenfolge stellt sicher, dass ein durch
+    # die Normalisierung entstandener fuehrender Bindestrich ebenfalls
+    # escaped wird.
+    text = steuerzeichen.feldwert_bereinigen(text) or ""
     if text.lstrip()[:1] in ("=", "+", "-", "@", "\t", "\r"):
         return "'" + text
     return text
@@ -270,12 +287,12 @@ class BelegwaechterHandler(BaseHTTPRequestHandler):
             conn = speicher.verbindung()
             radar = [
                 {
-                    "anbieter": r["anbieter"],
+                    "anbieter": _api_text(r["anbieter"]),
                     "einschaetzung": r["radar_einschaetzung"],
-                    "begruendung": r["radar_begruendung"],
-                    "zeitraum": r["zeitraum"],
-                    "betrag": r["betrag"],
-                    "waehrung": r["waehrung"],
+                    "begruendung": _api_text(r["radar_begruendung"]),
+                    "zeitraum": _api_text(r["zeitraum"]),
+                    "betrag": _api_text(r["betrag"]),
+                    "waehrung": _api_text(r["waehrung"]),
                     "reviewstatus": r["reviewstatus"],
                     "review_aufgabe": r["review_aufgabe"],
                 }

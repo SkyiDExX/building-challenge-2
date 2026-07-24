@@ -353,7 +353,53 @@ main { max-width: 1120px; margin: 0 auto; padding: 8px 20px 40px; }
 }
 .radar-name { font-weight: 600; overflow-wrap: anywhere; }
 .radar-zeile2 { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
-.radar-betrag { font-variant-numeric: tabular-nums; color: var(--text-leise); font-size: 0.9rem; }
+.radar-betrag { font-variant-numeric: tabular-nums; color: var(--text-leise); font-size: 0.9rem; overflow-wrap: anywhere; }
+.radar-ereignis { color: var(--text); font-size: 0.9rem; margin-top: 2px; }
+
+/* Aufklappbare Abo-Karte: geschlossen nur Produkt, Tarif, Abrechnung,
+   Kosten, naechstes Ereignis und Status; Details erst nach dem Aufklappen. */
+.abo-karte {
+  border: 1px solid var(--linie);
+  border-top-color: rgba(255, 255, 255, 0.16);
+  border-radius: 12px;
+  background: var(--glas-karte);
+  box-shadow: var(--schatten-karte);
+  overflow: hidden;
+}
+.abo-kopf {
+  cursor: pointer;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  list-style: none;
+}
+.abo-kopf::-webkit-details-marker { display: none; }
+.abo-kopf::after {
+  content: "▾ aufklappen";
+  color: var(--text-leise);
+  font-size: 0.78rem;
+}
+.abo-karte[open] .abo-kopf::after { content: "▴ einklappen"; }
+.abo-kopf:hover { background: rgba(242, 138, 69, 0.06); }
+.abo-details {
+  padding: 0 14px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border-top: 1px solid var(--linie);
+  padding-top: 10px;
+}
+.abo-feldliste {
+  margin: 0;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 3px 12px;
+  font-size: 0.88rem;
+}
+.abo-feldliste dt { color: var(--text-leise); }
+.abo-feldliste dd { margin: 0; overflow-wrap: anywhere; }
+.abo-dokumente { font-size: 0.85rem; color: var(--text-leise); overflow-wrap: anywhere; }
 .radar-begruendung { font-size: 0.88rem; color: var(--text-leise); }
 
 /* ---- Fuß ---- */
@@ -617,6 +663,15 @@ main { max-width: 1120px; margin: 0 auto; padding: 8px 20px 40px; }
   max-width: 100%;
 }
 .korrektur-aktion option { color: #0d1522; }
+.korrektur-erkannt { margin-top: 12px; border-top: 1px solid var(--linie); padding-top: 8px; }
+.korrektur-erkannt > summary {
+  cursor: pointer;
+  font-size: 0.82rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--text-leise);
+}
 .korrektur-eingabe { display: flex; gap: 8px; flex-wrap: wrap; }
 .korrektur-eingabe input { flex: 1 1 160px; min-width: 0; }
 

@@ -12,6 +12,8 @@ Grenze des MVP (siehe README, Abschnitt "Bekannte Einschraenkungen").
 """
 from __future__ import annotations
 
+import json
+
 from belegwaechter.betraege import betrag_zu_decimal
 from belegwaechter.modelle import (
     RADAR_BELEG_FEHLT,
@@ -43,13 +45,27 @@ def radar_bewerten(beleg: Beleg, vorheriger: dict | None) -> RadarEintrag:
             ),
         )
 
+    def _vorheriges_feld(name: str) -> str:
+        try:
+            felder = json.loads(vorheriger.get("felder_json") or "{}")
+        except (TypeError, ValueError):
+            felder = {}
+        return (felder.get(name) or {}).get("wert") or ""
+
     abweichungen = []
+    if (beleg.feldwert("anbieter") or "") != (vorheriger.get("anbieter") or ""):
+        abweichungen.append("Rechnungsaussteller")
     if (beleg.feldwert("tarif") or "") != (vorheriger.get("tarif") or ""):
         abweichungen.append("Tarif")
     if (beleg.feldwert("waehrung") or "") != (vorheriger.get("waehrung") or ""):
         abweichungen.append("Währung")
     if (beleg.feldwert("zeitraum") or "") != (vorheriger.get("zeitraum") or ""):
         abweichungen.append("Abrechnungszeitraum")
+    # Kanal- oder Intervallwechsel sind nie stillschweigend vergleichbar.
+    if (beleg.feldwert("abrechnungskanal") or "") != _vorheriges_feld("abrechnungskanal"):
+        abweichungen.append("Abrechnungskanal")
+    if (beleg.feldwert("abrechnungsintervall") or "") != _vorheriges_feld("abrechnungsintervall"):
+        abweichungen.append("Abrechnung")
 
     if abweichungen:
         dimensionen = ", ".join(abweichungen)

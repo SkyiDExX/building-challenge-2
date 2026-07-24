@@ -24,7 +24,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
-from belegwaechter import agent, betraege, dateinamen, datumformat, exportregeln, korrekturen, speicher, steuerzeichen  # noqa: E402
+from belegwaechter import agent, betraege, dateinamen, datumformat, exportregeln, korrekturen, kostenprofil, speicher, steuerzeichen  # noqa: E402
 from belegwaechter.fehlertexte import bereinigen  # noqa: E402
 
 HOST = "127.0.0.1"
@@ -162,6 +162,9 @@ def _beleg_zu_json(
         **ergebnis_zusatz,
         "original_pdf_verfuegbar": pdf_verfuegbar,
         "original_eml_verfuegbar": eml_verfuegbar,
+        # `anbieter` bleibt intern der rechtliche Aussteller; die API stellt
+        # ihn zusaetzlich unter seinem fachlichen Namen bereit.
+        "rechnungsaussteller": (felder.get("anbieter") or {}).get("wert"),
         # Berechnetes Feld aus der zentralen Exportregel -- die UI leitet
         # "Für Export bereit" nie selbst aus Statuswerten ab.
         "exportbereit": exportregeln.exportfaehig(
@@ -273,6 +276,114 @@ def _zugriff_erlaubt(handler: "BelegwaechterHandler", veraendernd: bool) -> tupl
                 return False, 403, _ZUGRIFF_VERWEIGERT
 
     return True, 200, {}
+
+
+def _effektive_werte(conn, row: dict) -> dict:
+    """Effektive Feldwerte einer Belegzeile (Auto-Rohwerte plus letzte
+    gueltige manuelle Korrektur) als einfaches Name->Wert-Dict."""
+    korrekturliste = speicher.korrekturen_fuer_beleg(conn, row["id"])
+    felder, _ = korrekturen.effektive_felder(json.loads(row["felder_json"]), korrekturliste)
+    werte = {name: (f or {}).get("wert") for name, f in felder.items()}
+    werte.setdefault("anbieter", row["anbieter"])
+    return werte
+
+
+def _abo_uebersicht(conn) -> list[dict]:
+    """Karten der Abo-Uebersicht: nur wiederkehrende Kosten mit Evidenz
+    (explizites oder abgeleitetes Intervall, Abo-Bestaetigung oder
+    mindestens zwei vergleichbare Rechnungen desselben Produktprofils).
+    Zahlungsnachweise ohne Rechnung, Einmalzahlungen ohne
+    Wiederholungsevidenz, Duplikate und kritische Review-Faelle erzeugen
+    nie eine Kostenkarte."""
+    gruppen: dict[str, dict] = {}
+    for row in speicher.alle_belege(conn):
+        werte = _effektive_werte(conn, row)
+        schluessel = kostenprofil.produkt_schluessel(werte)
+        if not schluessel:
+            continue
+        ist_kosten = exportregeln.exportfaehig_zeile(row)
+        ist_abo = (
+            row["dokumentart"] == "abo_bestaetigung"
+            and row["ausgang"] in ("uebernommen", "review")
+        )
+        if not (ist_kosten or ist_abo):
+            continue
+        gruppe = gruppen.setdefault(schluessel, {"kosten": [], "abo": []})
+        gruppe["kosten" if ist_kosten else "abo"].append((row, werte))
+
+    karten = []
+    for gruppe in gruppen.values():
+        kosten = gruppe["kosten"]
+        abo = gruppe["abo"]
+        if kosten:
+            row, werte = kosten[-1]
+            typ = "kosten"
+            intervall = werte.get("abrechnungsintervall")
+            intervall_herkunft = "aus Beleg"
+            if not intervall:
+                # Nach manuellen Korrekturen (z.B. ergaenzter Zeitraum) wird
+                # das Intervall zentral aus den effektiven Werten abgeleitet.
+                abgeleitet, herkunft = kostenprofil.intervall_ableiten(
+                    "", werte.get("tarif"), werte.get("zeitraum")
+                )
+                if abgeleitet != kostenprofil.INTERVALL_UNBEKANNT:
+                    intervall, intervall_herkunft = abgeleitet, herkunft
+            if not intervall and len(kosten) >= 2:
+                daten = [w.get("datum") for _, w in kosten if w.get("datum")]
+                intervall = kostenprofil.historien_intervall(daten)
+                intervall_herkunft = "aus Historie abgeleitet"
+            wiederkehrend = (
+                (intervall and intervall != "einmalig")
+                or len(kosten) >= 2
+                or bool(abo)
+            )
+            if not wiederkehrend:
+                continue
+        else:
+            row, werte = abo[-1]
+            typ = "abo_bestaetigung"
+            intervall = werte.get("abrechnungsintervall")
+            intervall_herkunft = "aus Bestätigung"
+
+        produkt = werte.get("produkt") or kostenprofil.anzeige_name(werte.get("anbieter"))
+        dokumente = [
+            {"beleg_id": r["id"], "dateiname": _api_text(r["dateiname"])}
+            for r, _ in (kosten + abo)[-5:]
+        ]
+        karte = {
+            "typ": typ,
+            "produkt": _api_text(produkt) or "Produkt nicht eindeutig",
+            "tarif": _api_text(werte.get("tarif")),
+            "rechnungsaussteller": _api_text(werte.get("anbieter")),
+            "abrechnungskanal": _api_text(werte.get("abrechnungskanal")),
+            "zahlungsdienst": _api_text(werte.get("zahlungsdienst")),
+            "abrechnung": intervall,
+            "intervall_herkunft": intervall_herkunft if intervall else None,
+            "naechste_abbuchung": datumformat.datum_ui(werte.get("naechste_abbuchung")),
+            "naechste_rechnung": datumformat.datum_ui(werte.get("naechste_rechnung")),
+            "letzte_rechnung": datumformat.datum_ui(werte.get("datum")),
+            "zeitraum": datumformat.zeitraum_ui(_api_text(werte.get("zeitraum"))),
+            "betrag": _api_text(werte.get("betrag")),
+            "waehrung": _api_text(werte.get("waehrung")),
+            "einschaetzung": row["radar_einschaetzung"],
+            "begruendung": _api_text(row["radar_begruendung"]),
+            # Kompatibilitaet: `anbieter` entspricht dem Rechnungsaussteller.
+            "anbieter": _api_text(werte.get("anbieter")),
+            "reviewstatus": row["reviewstatus"],
+            "review_aufgabe": _api_text(row["review_aufgabe"]),
+            "beleg_id": row["id"],
+            "vorgang_id": row["vorgang_id"],
+            "anzahl_rechnungen": len(kosten),
+            "dokumente": dokumente,
+        }
+        if _original_pdf_verfuegbar(row):
+            karte["original_pdf_url"] = f"/api/belege/{row['id']}/original"
+        if _original_eml_verfuegbar(conn, row):
+            karte["original_eml_url"] = f"/api/vorgaenge/{row['vorgang_id']}/original-eml"
+        karten.append(karte)
+
+    karten.sort(key=lambda k: (k["produkt"] or "").lower())
+    return karten
 
 
 def _csv_text(wert) -> str:
@@ -457,11 +568,16 @@ class BelegwaechterHandler(BaseHTTPRequestHandler):
             if not _WAEHRUNG_MUSTER.match(sauber):
                 return None, "Die Währung muss ein ISO-Code mit drei Buchstaben sein."
             return sauber, None
-        if feld == "datum":
+        if feld in ("datum", "naechste_abbuchung"):
             iso = _datum_iso(sauber)
             if iso is None:
                 return None, "Das Datum ist nicht als gültiges Datum lesbar."
             return iso, None
+        if feld == "abrechnungsintervall":
+            klein = sauber.lower()
+            if klein not in kostenprofil.ERLAUBTE_INTERVALLE:
+                return None, "Die Abrechnung muss monatlich, jährlich, unregelmäßig, einmalig oder unbekannt sein."
+            return klein, None
         return sauber, None
 
     def _korrekturen_anwenden(self, beleg_id: str) -> None:
@@ -585,23 +701,7 @@ class BelegwaechterHandler(BaseHTTPRequestHandler):
                 self._json(code, fehler)
                 return
             conn = speicher.verbindung()
-            # Kostenrelevante Radar-Karten folgen der zentralen
-            # Exportregel: nur exportfaehige Kosten-Belege bilden eine
-            # eigene Karte.
-            radar = [
-                {
-                    "anbieter": _api_text(r["anbieter"]),
-                    "einschaetzung": r["radar_einschaetzung"],
-                    "begruendung": _api_text(r["radar_begruendung"]),
-                    "zeitraum": datumformat.zeitraum_ui(_api_text(r["zeitraum"])),
-                    "betrag": _api_text(r["betrag"]),
-                    "waehrung": _api_text(r["waehrung"]),
-                    "reviewstatus": r["reviewstatus"],
-                    "review_aufgabe": r["review_aufgabe"],
-                }
-                for r in speicher.radar_uebersicht(conn)
-                if exportregeln.exportfaehig_zeile(r)
-            ]
+            radar = _abo_uebersicht(conn)
             conn.close()
             self._json(200, {"radar": radar})
         elif self.path == "/api/audit":
@@ -620,27 +720,43 @@ class BelegwaechterHandler(BaseHTTPRequestHandler):
                 return
             conn = speicher.verbindung()
             belege = speicher.alle_belege(conn)
-            conn.close()
             puffer = io.StringIO()
             schreiber = csv.writer(puffer, delimiter=";")
             schreiber.writerow(
-                ["Anbieter", "Datum", "Betrag", "Waehrung", "Zeitraum", "Referenz", "Quellenstatus", "Quelldatei"]
+                [
+                    "Produkt", "Tarif", "Rechnungsaussteller", "Abrechnungskanal",
+                    "Zahlungsdienst", "Rechnungsdatum", "Leistungszeitraum",
+                    "Abrechnungsintervall", "Betrag", "Waehrung", "Referenz",
+                    "Dokumentart", "Originaldatei", "Quellenstatus",
+                ]
             )
             for b in belege:
+                # Alleinige Quelle fuer Kostenzeilen ist die zentrale
+                # Exportregel; Produkt und rechtlicher Aussteller bleiben
+                # getrennte Spalten mit denselben effektiven Werten wie
+                # UI und Abo-Uebersicht.
                 if not exportregeln.exportfaehig_zeile(b):
                     continue
+                werte = _effektive_werte(conn, b)
                 schreiber.writerow(
                     [
-                        _csv_text(b["anbieter"]),
-                        _csv_text(datumformat.datum_csv(b["datum"])),
+                        _csv_text(werte.get("produkt") or kostenprofil.anzeige_name(werte.get("anbieter"))),
+                        _csv_text(werte.get("tarif")),
+                        _csv_text(werte.get("anbieter")),
+                        _csv_text(werte.get("abrechnungskanal")),
+                        _csv_text(werte.get("zahlungsdienst")),
+                        _csv_text(datumformat.datum_csv(werte.get("datum"))),
+                        _csv_text(datumformat.zeitraum_csv(werte.get("zeitraum"))),
+                        _csv_text(werte.get("abrechnungsintervall")),
                         b["betrag_dezimal"] or "",
-                        _csv_text(b["waehrung"]),
-                        _csv_text(datumformat.zeitraum_csv(b["zeitraum"])),
-                        _csv_text(b["referenz"]),
-                        _csv_text(_QUELLENSTATUS_ANZEIGE.get(b["quellenstatus"], b["quellenstatus"])),
+                        _csv_text(werte.get("waehrung")),
+                        _csv_text(werte.get("referenz")),
+                        _csv_text(b["dokumentart"]),
                         _csv_text(b["dateiname"]),
+                        _csv_text(_QUELLENSTATUS_ANZEIGE.get(b["quellenstatus"], b["quellenstatus"])),
                     ]
                 )
+            conn.close()
             body = ("﻿" + puffer.getvalue()).encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "text/csv; charset=utf-8")

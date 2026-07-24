@@ -121,6 +121,22 @@ _FAELLIGKEIT_ZEILE_MUSTER = re.compile(
     r"^(?:f(?:ä|ae)llig\s+am|due\s+(?:on|by|date)|date\s+due|bezahlt\s+am|paid\s+on)\b",
     re.IGNORECASE,
 )
+# Produkt-/Leistungs-Labelzeilen benennen das Produkt, nie den Aussteller.
+_PRODUKTFELD_ZEILE_MUSTER = re.compile(
+    r"^(?:produkt|product|leistung|service|beschreibung|description|artikel|item|plan|abo|subscription)\s*:",
+    re.IGNORECASE,
+)
+# Zahlweg- und Abrechnungskanal-Zeilen beschreiben, WIE bezahlt wird --
+# nie, WER die Rechnung stellt.
+_ZAHLWEG_ZEILE_MUSTER = re.compile(
+    r"^(?:bezahlt\s+über|paid\s+via|zahlungsmethode|payment\s+method|zahlungsdienst"
+    r"|abrechnung\s+über|abgerechnet\s+über|billed\s+(?:via|through|by)|store"
+    r"|abrechnung\s*:|billing\s*:)",
+    re.IGNORECASE,
+)
+_BEGRUESSUNG_MUSTER = re.compile(
+    r"^(?:hallo|hi|hey|guten\s+tag|sehr\s+geehrte|dear|liebe[rs]?)\b", re.IGNORECASE
+)
 _DATUM_WERT = rf"(?:{_WERT_DATUM_DE_NUMERISCH}|{_WERT_DATUM_DE_AUSGESCHRIEBEN}|{_WERT_DATUM_EN})"
 _DATUM_ZEILE_MUSTER = re.compile(rf"^{_DATUM_WERT}$", re.IGNORECASE)
 _ZEITRAUM_ZEILE_MUSTER = re.compile(
@@ -155,6 +171,10 @@ def _anbieter_plausibel(zeile: str) -> bool:
     'Netlify, Inc.' oder 'Anthropic, PBC' bleiben zulaessig."""
     woerter = zeile.split()
     if not woerter:
+        return False
+    # Begruessungen ("Hallo ...") adressieren eine Person, nie eine
+    # Organisation.
+    if _BEGRUESSUNG_MUSTER.match(zeile):
         return False
     # Deutlich satzartige Struktur: zu viele Woerter, mehrere
     # Funktionswoerter oder ein kleingeschrieben endender Satz mit Punkt.
@@ -254,6 +274,10 @@ def _anbieter_kandidat(zeilen: list[str]) -> str | None:
         if _LABEL_ZEILE_MUSTER.match(zeile):
             continue
         if _FAELLIGKEIT_ZEILE_MUSTER.match(zeile):
+            continue
+        if _ZAHLWEG_ZEILE_MUSTER.match(zeile):
+            continue
+        if _PRODUKTFELD_ZEILE_MUSTER.match(zeile):
             continue
         if _DATUM_ZEILE_MUSTER.match(zeile):
             continue

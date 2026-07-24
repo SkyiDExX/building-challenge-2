@@ -90,6 +90,10 @@ def _werkzeuge_textquelle(extraktionswerkzeug: str, quelle_beschreibung: str) ->
             "dokumentart", "dokumentart-regeln", True,
             f"{quelle_beschreibung}: Dokumentart wird regelbasiert bestimmt.",
         ),
+        "kostenprofil": Werkzeugschritt(
+            "kostenprofil", "kostenprofil-regeln", True,
+            f"{quelle_beschreibung}: Produkt- und Abrechnungsprofil wird bestimmt.",
+        ),
         "checkliste": Werkzeugschritt(
             "checkliste", "checkliste-fail-closed", True,
             f"{quelle_beschreibung}: Vollständigkeit wird geprüft.",
@@ -108,7 +112,7 @@ def _werkzeuge_textquelle(extraktionswerkzeug: str, quelle_beschreibung: str) ->
 def _werkzeuge_inaktiv(begruendung: str) -> dict[str, Werkzeugschritt]:
     return {
         name: Werkzeugschritt(name, "keins", False, begruendung)
-        for name in ("extraktion", "dokumentart", "checkliste", "bestand", "radar")
+        for name in ("extraktion", "dokumentart", "kostenprofil", "checkliste", "bestand", "radar")
     }
 
 
@@ -189,6 +193,9 @@ def plan_verfeinern(
         neue_werkzeuge["dokumentart"] = Werkzeugschritt(
             "dokumentart", "keins", False, "Übersprungen: kein lesbarer Inhalt für die Einordnung."
         )
+        neue_werkzeuge["kostenprofil"] = Werkzeugschritt(
+            "kostenprofil", "keins", False, "Übersprungen: kein lesbarer Inhalt für das Produktprofil."
+        )
         neue_werkzeuge["checkliste"] = Werkzeugschritt(
             "checkliste", "keins", False, "Übersprungen: kein lesbarer Originalbeleg vorhanden."
         )
@@ -209,13 +216,20 @@ def plan_verfeinern(
             "radar", "keins", False, "Übersprungen: Checkliste unvollständig, Automatikpfad endet in Review."
         )
         grund = "Checkliste unvollständig: Radar deaktiviert."
-    elif dokumentart in ("zahlungsbeleg", "abo_bestaetigung"):
+    elif dokumentart == "zahlungsbeleg":
         neue_werkzeuge["radar"] = Werkzeugschritt(
             "radar", "keins", False,
-            "Übersprungen: kein Abovergleich für diese Dokumentart, "
-            "sie darf die Preisbaseline nicht verfälschen.",
+            "Übersprungen: Zahlungsnachweis, keine eigene Kostenzeile und "
+            "keine Radar-Baseline.",
         )
-        grund = f"Dokumentart '{dokumentart}': Radar deaktiviert, keine Baseline-Aktualisierung."
+        grund = "Zahlungsnachweis erkannt: Kostenexport und Radar-Baseline deaktiviert."
+    elif dokumentart == "abo_bestaetigung":
+        neue_werkzeuge["radar"] = Werkzeugschritt(
+            "radar", "keins", False,
+            "Übersprungen: Abo-Bestätigung ist eine Ankündigung, keine "
+            "Kostenbasis für den Preisvergleich.",
+        )
+        grund = "Abo-Bestätigung erkannt: Abo-Profil aktiv, Kostenexport deaktiviert."
 
     if grund is None:
         return plan

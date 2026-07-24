@@ -45,7 +45,7 @@ def naechste_aktivitaet(texte: list[str]) -> tuple[str | None, str, str | None, 
             AKTIVITAET_ART_ZAHLUNG,
             AKTIVITAET_BESTAETIGT,
             datum,
-            f"Nächste Zahlung bestätigt: explizites Verlängerungsdatum {datum} im Dokument genannt.",
+            f"Nächste Abbuchung bestätigt: explizites Verlängerungsdatum {datum} im Dokument genannt.",
         )
 
     treffer_zeitraum = _MUSTER_ZEITRAUM_VON_BIS.search(gesamt)
@@ -55,8 +55,8 @@ def naechste_aktivitaet(texte: list[str]) -> tuple[str | None, str, str | None, 
             AKTIVITAET_ART_BELEG,
             AKTIVITAET_ERWARTET,
             bis_datum,
-            f"Nächster Beleg erwartet: Leistungszeitraum bis {bis_datum} erkannt. "
-            "Das ist keine Aussage über eine sichere nächste Zahlung.",
+            f"Nächste Rechnung erwartet: Leistungszeitraum bis {bis_datum} erkannt. "
+            "Das ist keine Aussage über eine sichere Abbuchung.",
         )
 
     return (
@@ -75,7 +75,7 @@ def abo_bestaetigung_begruendung(art: str | None, status: str, datum: str | None
     Compliance-Aussage."""
     if art == AKTIVITAET_ART_ZAHLUNG and status == AKTIVITAET_BESTAETIGT and datum:
         return (
-            f"Abo und Verlängerung erkannt. Nächste Zahlung bestätigt für {datum}, "
+            f"Abo und Verlängerung erkannt. Nächste Abbuchung bestätigt für {datum}, "
             "weil das Verlängerungsdatum explizit genannt wurde. Es liegt noch keine "
             "Rechnung vor."
         )

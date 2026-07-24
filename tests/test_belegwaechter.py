@@ -190,9 +190,9 @@ class AuditUndProvenienzTest(IsolierteDatenbankTestCase):
         namen = [s["schritt"] for s in schritte]
         erwartete_schritte = [
             "Eingang erkannt", "Quellenqualität bewertet", "Ausführungsplan erstellt",
-            "Felder extrahiert", "Dokumentart bestimmt", "Vollständigkeit geprüft",
-            "Bestand abgeglichen", "Abovergleich bewertet", "Entscheidung getroffen",
-            "Ergebnis gespeichert", "Auditverlauf aktualisiert",
+            "Felder extrahiert", "Dokumentart bestimmt", "Produktprofil bestimmt",
+            "Vollständigkeit geprüft", "Bestand abgeglichen", "Abovergleich bewertet",
+            "Entscheidung getroffen", "Ergebnis gespeichert", "Auditverlauf aktualisiert",
         ]
         self.assertEqual(namen, erwartete_schritte)
 
@@ -1509,7 +1509,7 @@ class NaechsteAktivitaetTest(unittest.TestCase):
         art, status, datum, begruendung = vorgang.naechste_aktivitaet(["01.08.2026 - 31.08.2026"])
         self.assertEqual((art, status, datum), ("beleg", "erwartet", "31.08.2026"))
         self.assertNotEqual(status, "bestaetigt")
-        self.assertIn("keine Aussage über eine sichere nächste Zahlung", begruendung)
+        self.assertIn("keine Aussage über eine sichere Abbuchung", begruendung)
 
     def test_verlaengerungsdatum_hat_vorrang_vor_zeitraum(self):
         art, status, datum, _ = vorgang.naechste_aktivitaet(
@@ -2679,7 +2679,7 @@ class DreiEbenenUiTest(unittest.TestCase):
             self.assertNotIn("display: none", block)
 
     def test_radar_titel_nutzt_nur_anbieter_oder_platzhalter(self):
-        self.assertIn('r.anbieter || "Anbieter nicht eindeutig"', self.js)
+        self.assertIn('r.produkt || "Produkt nicht eindeutig"', self.js)
         self.assertNotIn("${r.anbieter} (", self.js, "Kein Zeitraum mehr im Radar-Titel")
 
     def test_offene_faelle_stehen_vor_fertigen(self):
@@ -3239,6 +3239,287 @@ class KorrekturUiTest(unittest.TestCase):
 
     def test_esc_schliesst_korrektur_dialog(self):
         self.assertIn('if (!$("korrektur-overlay").hidden) korrekturSchliessen();', self.js)
+
+
+def _synthetische_eml(betreff: str, textkoerper: str, absender: str = "Beispiel Plattform GmbH <billing@beispiel.invalid>") -> bytes:
+    """Reine Text-EML ohne Anhaenge, ausschliesslich mit generischen
+    Beispielwerten (keine realen Anbieter, Namen oder Adressen)."""
+    from email.message import EmailMessage
+
+    msg = EmailMessage()
+    msg["From"] = absender
+    msg["To"] = "demo@beispiel.invalid"
+    msg["Subject"] = betreff
+    msg["Date"] = "Mon, 03 Aug 2026 09:00:00 +0200"
+    msg["Message-ID"] = "<test-abo@beispiel.invalid>"
+    msg.set_content(textkoerper)
+    return msg.as_bytes()
+
+
+class ProduktprofilTest(unittest.TestCase):
+    """Generische Produktidentitaet: Produkt und rechtlicher Aussteller
+    getrennt, keine Begruessungen oder Saetze als Produkt, Intervall nur
+    mit Evidenz."""
+
+    def test_anzeige_name_entfernt_nur_abschliessende_rechtsform(self):
+        from belegwaechter import kostenprofil
+
+        self.assertEqual(kostenprofil.anzeige_name("Beispiel Software GmbH"), "Beispiel Software")
+        self.assertEqual(kostenprofil.anzeige_name("Beispielfirma, PBC"), "Beispielfirma")
+        self.assertEqual(kostenprofil.anzeige_name("Beispielhost, Inc."), "Beispielhost")
+        self.assertEqual(kostenprofil.anzeige_name("AG Beispiel Consulting"), "AG Beispiel Consulting")
+        self.assertIsNone(kostenprofil.anzeige_name(None))
+
+    def test_produktfeld_hat_vorrang_vor_aussteller(self):
+        from belegwaechter import kostenprofil
+
+        profil = kostenprofil.produktprofil_bestimmen(
+            felder={"anbieter": "Beispielfirma, PBC", "tarif": "Pro 5x", "zeitraum": None, "waehrung": "EUR"},
+            text="Produkt: Beispiel KI Chat\nAbrechnung über: Beispiel App-Store\nBezahlt über: Beispiel Zahlungsdienst\nmonatlich",
+        )
+        self.assertEqual(profil.produkt, "Beispiel KI Chat")
+        self.assertEqual(profil.rechnungsaussteller, "Beispielfirma, PBC")
+        self.assertEqual(profil.abrechnungskanal, "Beispiel App-Store")
+        self.assertEqual(profil.zahlungsdienst, "Beispiel Zahlungsdienst")
+        self.assertEqual(profil.abrechnungsintervall, "monatlich")
+        self.assertEqual(profil.intervall_herkunft, "explizit genannt")
+
+    def test_begruessung_und_saetze_werden_nie_produkt(self):
+        from belegwaechter import kostenprofil
+
+        profil = kostenprofil.produktprofil_bestimmen(
+            felder={"anbieter": None, "tarif": None, "zeitraum": None, "waehrung": "EUR"},
+            text="Hallo Alex Beispiel!\nSie haben eine Zahlung gesendet.",
+            dateiname="zahlung_2026.pdf",
+        )
+        self.assertIsNone(profil.produkt)
+        self.assertIn("Produkt nicht eindeutig", profil.begruendung)
+
+    def test_intervall_aus_zeitraum_mit_jahreswechsel(self):
+        from belegwaechter import kostenprofil
+
+        monat, herkunft = kostenprofil.intervall_ableiten("", None, "15.12.2026-14.01.2027")
+        self.assertEqual(monat, "monatlich")
+        self.assertEqual(herkunft, "aus Zeitraum abgeleitet")
+        jahr, herkunft_jahr = kostenprofil.intervall_ableiten("", None, "2026-08-01 bis 2027-08-01")
+        self.assertEqual(jahr, "jährlich")
+        self.assertEqual(herkunft_jahr, "aus Zeitraum abgeleitet")
+        unbekannt, _ = kostenprofil.intervall_ableiten("", None, "01.08.2026-14.08.2026")
+        self.assertEqual(unbekannt, "unbekannt")
+
+    def test_naechste_abbuchung_nur_mit_explizitem_datum(self):
+        from belegwaechter import kostenprofil
+
+        mit_datum = kostenprofil.produktprofil_bestimmen(
+            felder={"anbieter": "Beispielfirma GmbH", "tarif": None, "zeitraum": None, "waehrung": "EUR"},
+            text="Ihr Abo verlängert sich am 05.09.2026.",
+        )
+        self.assertEqual(mit_datum.naechste_abbuchung, "2026-09-05")
+        nur_zeitraum = kostenprofil.produktprofil_bestimmen(
+            felder={"anbieter": "Beispielfirma GmbH", "tarif": None, "zeitraum": "01.08.2026-31.08.2026", "waehrung": "EUR"},
+            text="",
+        )
+        self.assertIsNone(nur_zeitraum.naechste_abbuchung)
+        self.assertEqual(nur_zeitraum.naechste_rechnung, "2026-08-31")
+
+
+class AkzeptanzfaelleTest(HttpTestCase):
+    """Synthetische Akzeptanzfaelle des Produktsemantik-Laufs -- keine
+    realen Anbieter, Betraege, Namen oder Adressen."""
+
+    def _belege(self) -> list[dict]:
+        status, body = self._senden("GET", "/api/ergebnis", host=f"127.0.0.1:{self.port}")
+        return json.loads(body)["belege"]
+
+    def _radar(self) -> list[dict]:
+        status, body = self._senden("GET", "/api/radar", host=f"127.0.0.1:{self.port}")
+        return json.loads(body)["radar"]
+
+    def _csv_zeilen(self) -> list[str]:
+        status, daten = self._senden("GET", "/api/export.csv", host=f"127.0.0.1:{self.port}")
+        zeilen = [z for z in daten.decode("utf-8-sig").splitlines() if z.strip()]
+        return zeilen[1:]
+
+    def test_ki_abo_ueber_app_store_ohne_rechnung(self):
+        eml = _synthetische_eml(
+            "Deine Abo-Bestätigung",
+            "Produkt: Beispiel KI Chat\nTarif: Pro 5x\n"
+            "Abrechnung über: Beispiel App-Store\n"
+            "Ihr Abo verlängert sich am 05.09.2026.\n"
+            "Betrag: 29,00 EUR\nWaehrung: EUR\nAbrechnung: monatlich",
+            absender="Beispielfirma, PBC <billing@beispiel.invalid>",
+        )
+        self._upload_ok([("abo_bestaetigung.eml", eml)])
+        beleg = self._belege()[0]
+        self.assertEqual(beleg["dokumentart"], "abo_bestaetigung")
+        self.assertEqual(beleg["felder"]["produkt"]["wert"], "Beispiel KI Chat")
+        self.assertEqual(beleg["rechnungsaussteller"], "Beispielfirma, PBC")
+        self.assertEqual(beleg["felder"]["abrechnungskanal"]["wert"], "Beispiel App-Store")
+        self.assertFalse(beleg["exportbereit"])
+        self.assertEqual(self._csv_zeilen(), [], "Ohne Rechnung keine Kostenzeile")
+        radar = self._radar()
+        self.assertEqual(len(radar), 1)
+        self.assertEqual(radar[0]["typ"], "abo_bestaetigung")
+        self.assertEqual(radar[0]["produkt"], "Beispiel KI Chat")
+        self.assertEqual(radar[0]["naechste_abbuchung"], "05.09.2026")
+
+    def test_design_tool_zahlung_ueber_zahlungsdienst(self):
+        inhalt = _synthetische_rechnung(
+            [
+                "Zahlungsbestätigung",
+                "Merchant: Beispiel Design Studio",
+                "Bezahlt über: Beispiel Zahlungsdienst",
+                "Datum: 01.08.2026",
+                "Betrag: 15,00 EUR",
+                "Waehrung: EUR",
+            ]
+        )
+        self._upload_ok([("design_tool_zahlung.pdf", inhalt)])
+        beleg = self._belege()[0]
+        self.assertEqual(beleg["dokumentart"], "zahlungsbeleg")
+        self.assertEqual(beleg["felder"]["produkt"]["wert"], "Beispiel Design Studio")
+        self.assertEqual(beleg["felder"]["zahlungsdienst"]["wert"], "Beispiel Zahlungsdienst")
+        self.assertEqual(beleg["review_aufgabe"], "Rechnung oder Originalbeleg anfordern")
+        self.assertFalse(beleg["exportbereit"])
+        self.assertEqual(self._csv_zeilen(), [])
+        self.assertEqual(self._radar(), [], "Zahlungsnachweis ohne Rechnung ist keine Abo-Karte")
+
+    def test_hosting_rechnung_plus_zahlungsbeleg_eine_kostenzeile(self):
+        self._upload_ok(
+            [("cloudbasis_rechnung_und_zahlung.eml", _lesen("cloudbasis_rechnung_und_zahlung.eml"))]
+        )
+        zeilen = self._csv_zeilen()
+        self.assertEqual(len(zeilen), 1)
+        radar = self._radar()
+        self.assertEqual(len(radar), 1)
+        self.assertEqual(radar[0]["typ"], "kosten")
+        self.assertEqual(radar[0]["abrechnung"], "monatlich")
+        self.assertTrue(radar[0]["produkt"])
+        self.assertNotIn("GmbH", radar[0]["produkt"], "Anzeigename ohne Rechtsformzusatz")
+        pdf_kind = next(b for b in self._belege() if b["dateityp"] == "PDF")
+        self.assertTrue(pdf_kind["original_pdf_verfuegbar"])
+
+    def test_zwei_monatsrechnungen_ergeben_eine_kompakte_karte(self):
+        self._upload_ok([("cloudbasis_juni.pdf", _lesen("cloudbasis_juni.pdf"))])
+        self._upload_ok([("cloudbasis_juli.pdf", _lesen("cloudbasis_juli.pdf"))])
+        radar = self._radar()
+        self.assertEqual(len(radar), 1, "Zwei Rechnungen desselben Produkts sind EINE Karte")
+        self.assertEqual(radar[0]["anzahl_rechnungen"], 2)
+        self.assertEqual(radar[0]["einschaetzung"], "veraendert_eindeutig")
+
+    def test_einmalige_rechnung_ohne_wiederholungsevidenz_keine_karte(self):
+        inhalt = _synthetische_rechnung(
+            [
+                "Beispiel Beratung GmbH",
+                "Rechnung Nr. RE-77",
+                "Datum: 01.08.2026",
+                "Betrag: 500,00 EUR",
+                "Waehrung: EUR",
+            ]
+        )
+        self._upload_ok([("beratung.pdf", inhalt)])
+        self.assertEqual(len(self._csv_zeilen()), 1, "Einmalige Rechnung bleibt eine Kostenzeile")
+        self.assertEqual(self._radar(), [], "Ohne Wiederholungsevidenz keine Abo-Karte")
+
+    def test_unsicheres_produkt_bleibt_ehrlicher_review_fall(self):
+        inhalt = _synthetische_rechnung(
+            [
+                "Hallo Alex Beispiel!",
+                "Sie haben eine Zahlung gesendet.",
+                "Datum: 01.08.2026",
+                "Betrag: 12,00 EUR",
+                "Waehrung: EUR",
+            ]
+        )
+        self._upload_ok([("gruss_zahlung.pdf", inhalt)])
+        beleg = self._belege()[0]
+        self.assertIsNone(beleg["felder"]["anbieter"]["wert"], "Eine Begrüßung ist nie der Aussteller")
+        self.assertIsNone(beleg["felder"]["produkt"]["wert"], "Eine Begrüßung ist nie das Produkt")
+        self.assertEqual(beleg["ausgang"], "review")
+        self.assertEqual(self._radar(), [])
+        self.assertEqual(self._csv_zeilen(), [])
+
+
+class CsvStrukturTest(HttpTestCase):
+    """Neue prüfungsfreundliche CSV-Struktur: Produkt und rechtlicher
+    Aussteller getrennt, ISO-Daten, Intervall, Dokumentart."""
+
+    def test_spalten_und_werte(self):
+        inhalt = _synthetische_rechnung(
+            [
+                "Beispielhost, Inc.",
+                "Rechnung Nr. RE-10",
+                "Datum: 01.08.2026",
+                "Leistungszeitraum: 01.08.2026 - 31.08.2026",
+                "Tarif: Cloud M",
+                "Betrag: 9,00 EUR",
+                "Waehrung: EUR",
+            ]
+        )
+        self._upload_ok([("rechnung.pdf", inhalt)])
+        status, daten = self._senden("GET", "/api/export.csv", host=f"127.0.0.1:{self.port}")
+        zeilen = [z for z in daten.decode("utf-8-sig").splitlines() if z.strip()]
+        kopf = zeilen[0].split(";")
+        self.assertEqual(
+            kopf,
+            ["Produkt", "Tarif", "Rechnungsaussteller", "Abrechnungskanal",
+             "Zahlungsdienst", "Rechnungsdatum", "Leistungszeitraum",
+             "Abrechnungsintervall", "Betrag", "Waehrung", "Referenz",
+             "Dokumentart", "Originaldatei", "Quellenstatus"],
+        )
+        werte = zeilen[1].split(";")
+        je_spalte = dict(zip(kopf, werte))
+        self.assertEqual(je_spalte["Produkt"], "Beispielhost")
+        self.assertEqual(je_spalte["Rechnungsaussteller"], "Beispielhost, Inc.")
+        self.assertEqual(je_spalte["Rechnungsdatum"], "2026-08-01")
+        self.assertEqual(je_spalte["Leistungszeitraum"], "2026-08-01 bis 2026-08-31")
+        self.assertEqual(je_spalte["Abrechnungsintervall"], "monatlich")
+        self.assertEqual(je_spalte["Betrag"], "9.00")
+        self.assertEqual(je_spalte["Dokumentart"], "rechnung")
+        self.assertEqual(je_spalte["Quellenstatus"], "Original vorhanden")
+
+
+class ProduktVokabularUiTest(unittest.TestCase):
+    """Fachliches Vokabular und aufklappbare Abo-Karten in der Oberflaeche."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.html = (REPO_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
+        cls.js = (REPO_ROOT / "web" / "static" / "app.js").read_text(encoding="utf-8")
+        cls.css = (REPO_ROOT / "web" / "static" / "styles.css").read_text(encoding="utf-8")
+
+    def test_abo_uebersicht_ueberschrift_und_unterzeile(self):
+        self.assertIn("Abo-Übersicht", self.html)
+        self.assertIn("Radar für wiederkehrende Kosten und fehlende Rechnungen.", self.html)
+        self.assertNotIn("Abo-Radar", self.html)
+
+    def test_fachliches_vokabular_statt_technik(self):
+        self.assertIn("Nächste Abbuchung", self.js)
+        self.assertIn("Nächste Rechnung erwartet", self.js)
+        self.assertIn("Rechnungsaussteller", self.js)
+        self.assertIn("Abrechnung über", self.js)
+        self.assertIn("Bezahlt über", self.js)
+        self.assertNotIn("Rhythmus", self.js)
+        self.assertNotIn("Rhythmus", self.html)
+
+    def test_abo_karte_ist_aufklappbar_und_barrierefrei(self):
+        self.assertIn('document.createElement("details")', self.js)
+        self.assertIn('karte.className = "abo-karte"', self.js)
+        self.assertIn('kopf.setAttribute("aria-expanded"', self.js)
+        self.assertIn(".abo-kopf", self.css)
+        self.assertIn(".abo-details", self.css)
+
+    def test_kostentexte_sind_vorsichtig_formuliert(self):
+        self.assertIn("je Monat", self.js)
+        self.assertIn("je Jahr", self.js)
+        self.assertIn("Letzter Rechnungsbetrag:", self.js)
+        self.assertIn("Preis laut Bestätigung:", self.js)
+
+    def test_korrekturdialog_zeigt_problemfelder_und_bereits_erkannt(self):
+        self.assertIn("Bereits erkannt", self.js)
+        self.assertIn("korrektur-erkannt", self.css)
+        self.assertIn('["produkt", "Produkt"]', self.js)
+        self.assertIn('["anbieter", "Rechnungsaussteller"]', self.js)
 
 
 if __name__ == "__main__":

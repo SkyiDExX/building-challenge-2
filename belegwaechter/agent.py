@@ -28,6 +28,7 @@ from belegwaechter import mailparser
 from belegwaechter import planen
 from belegwaechter import exportregeln
 from belegwaechter import korrekturen as korrekturen_modul
+from belegwaechter import kostenprofil as kostenprofil_modul
 from belegwaechter import radar as radar_modul
 from belegwaechter import speicher
 from belegwaechter import vorgang as vorgang_modul
@@ -98,6 +99,7 @@ def _schritt(
 _BEKANNTE_SCHRITTNAMEN_JE_WERKZEUG = {
     "extraktion": "Felder extrahiert",
     "dokumentart": "Dokumentart bestimmt",
+    "kostenprofil": "Produktprofil bestimmt",
     "checkliste": "Vollständigkeit geprüft",
     "bestand": "Bestand abgeglichen",
     "radar": "Abovergleich bewertet",
@@ -155,6 +157,27 @@ def _plan_und_schritte_pruefen(plaene: list[planen.Ausfuehrungsplan], schritte: 
             raise PlanKonsistenzFehler("Planrevision ohne aufsteigende Version.")
         if not aktueller.revisionsgrund:
             raise PlanKonsistenzFehler("Planrevision ohne protokollierten Revisionsgrund.")
+
+
+def _profil_in_felder(beleg: Beleg, profil) -> None:
+    """Uebertraegt das Produktprofil in die Beleg-Felder. `anbieter` bleibt
+    der rechtliche Rechnungsaussteller; `produkt` und die uebrigen
+    Profilfelder sind abgeleitete fachliche Werte mit transparenter
+    Herkunft (intervall_herkunft ist die Herkunft des Intervall-Felds)."""
+    def setzen(name: str, wert, herkunft: str) -> None:
+        beleg.felder[name] = ExtrahiertesFeld(name, wert, herkunft if wert else "fehlt")
+
+    setzen("produkt", profil.produkt, profil.produkt_herkunft)
+    setzen("abrechnungskanal", profil.abrechnungskanal, "aus Dokument")
+    setzen("zahlungsdienst", profil.zahlungsdienst, "aus Dokument")
+    intervall = (
+        profil.abrechnungsintervall
+        if profil.abrechnungsintervall != kostenprofil_modul.INTERVALL_UNBEKANNT
+        else None
+    )
+    setzen("abrechnungsintervall", intervall, profil.intervall_herkunft)
+    setzen("naechste_abbuchung", profil.naechste_abbuchung, "explizit genannt")
+    setzen("naechste_rechnung", profil.naechste_rechnung, "aus Zeitraum abgeleitet")
 
 
 def _plan_revidieren(
@@ -399,6 +422,25 @@ def verarbeite_datei(
         t0 = _jetzt()
         werkzeugschritt = plan.werkzeuge["dokumentart"]
         _schritt(beleg, "Dokumentart bestimmt", "uebersprungen", "keins", werkzeugschritt.begruendung, t0, _jetzt())
+
+    # 4c. Werkzeuge ausfuehren: Produkt- und Abrechnungsprofil bestimmt.
+    # Laeuft nach Extraktion und Dokumentart, vor Bestand und Radar; der
+    # Ausfuehrungsplan entscheidet, ob das Werkzeug aktiv ist.
+    if plan.werkzeug_aktiv("kostenprofil"):
+        t0 = _jetzt()
+        profil = kostenprofil_modul.produktprofil_bestimmen(
+            felder={n: beleg.feldwert(n) for n in ("anbieter", "tarif", "zeitraum", "waehrung")},
+            text=extrahierter_text,
+            dateiname=beleg.dateiname,
+            betreff=kontext.betreff if kontext else "",
+            mailtext=kontext.mailtext if kontext else "",
+        )
+        _profil_in_felder(beleg, profil)
+        _schritt(beleg, "Produktprofil bestimmt", "ok", "kostenprofil-regeln", profil.begruendung, t0, _jetzt())
+    else:
+        t0 = _jetzt()
+        werkzeugschritt = plan.werkzeuge["kostenprofil"]
+        _schritt(beleg, "Produktprofil bestimmt", "uebersprungen", "keins", werkzeugschritt.begruendung, t0, _jetzt())
 
     # 5. Bewerten: Vollständigkeit geprüft
     checkliste_vollstaendig: bool | None = None
@@ -784,6 +826,29 @@ def neubewerten(conn: sqlite3.Connection, beleg_id: str) -> Beleg | None:
         "Manuell geprüfte Felder: " + (", ".join(geaenderte) or "keine") + ".",
         t0, _jetzt(),
     )
+
+    # Produktprofil aus den effektiven Basisfeldern nachziehen: fehlende
+    # abgeleitete Werte (z.B. Produkt nach Aussteller-Korrektur oder
+    # Intervall nach Zeitraum-Korrektur) werden ergaenzt; manuell gesetzte
+    # oder als nicht vorhanden bestaetigte Profilfelder bleiben unberuehrt.
+    t0 = _jetzt()
+    profil = kostenprofil_modul.produktprofil_bestimmen(
+        felder={n: beleg.feldwert(n) for n in ("anbieter", "tarif", "zeitraum", "waehrung")},
+    )
+    profil_intervall = (
+        profil.abrechnungsintervall
+        if profil.abrechnungsintervall != kostenprofil_modul.INTERVALL_UNBEKANNT
+        else None
+    )
+    for name, wert, herkunft in (
+        ("produkt", profil.produkt, profil.produkt_herkunft),
+        ("abrechnungsintervall", profil_intervall, profil.intervall_herkunft),
+        ("naechste_rechnung", profil.naechste_rechnung, "aus Zeitraum abgeleitet"),
+    ):
+        vorhanden = beleg.felder.get(name)
+        if (vorhanden is None or vorhanden.wert is None) and wert and name not in nicht_vorhanden:
+            beleg.felder[name] = ExtrahiertesFeld(name, wert, herkunft)
+    _schritt(beleg, "Produktprofil bestimmt", "ok", "kostenprofil-regeln", profil.begruendung, t0, _jetzt())
 
     # Vollstaendigkeit mit effektiven Werten und bestaetigten Abwesenheiten.
     t0 = _jetzt()

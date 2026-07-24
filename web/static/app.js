@@ -20,11 +20,27 @@ const QUELLE_LABEL = {
 };
 
 const RADAR_LABEL = {
-  neu: ["Neu erfasst", "badge-fertig"],
+  neu: ["Noch kein Vergleich", "badge-quelle"],
   stabil: ["Stabil", "badge-fertig"],
   veraendert_eindeutig: ["Preis verändert", "badge-review"],
   vergleich_erforderlich: ["Vergleich erforderlich", "badge-review"],
-  beleg_fehlt: ["Beleg fehlt", "badge-dublette"],
+  beleg_fehlt: ["Rechnung fehlt", "badge-dublette"],
+};
+
+const FELD_LABEL = {
+  anbieter: "Rechnungsaussteller",
+  produkt: "Produkt",
+  tarif: "Tarif",
+  datum: "Datum",
+  betrag: "Betrag",
+  waehrung: "Währung",
+  zeitraum: "Leistungszeitraum",
+  referenz: "Referenz",
+  abrechnungskanal: "Abrechnung über",
+  zahlungsdienst: "Bezahlt über",
+  abrechnungsintervall: "Abrechnung",
+  naechste_abbuchung: "Nächste Abbuchung",
+  naechste_rechnung: "Nächste Rechnung erwartet",
 };
 
 const DOKUMENTART_LABEL = {
@@ -39,13 +55,17 @@ let letzteVorgaenge = [];
 
 function aktivitaetBadge(v) {
   if (v.naechste_aktivitaet_status === "bestaetigt" && v.naechste_aktivitaet_art === "zahlung") {
-    return badge(`Nächste Zahlung: ${v.naechste_aktivitaet_datum} (bestätigt)`, "badge-fertig");
+    return badge(`Nächste Abbuchung: ${v.naechste_aktivitaet_datum} (belegt)`, "badge-fertig");
   }
   if (v.naechste_aktivitaet_status === "erwartet" && v.naechste_aktivitaet_art === "beleg") {
-    const bis = v.naechste_aktivitaet_datum ? ` bis ${v.naechste_aktivitaet_datum}` : "";
-    return badge(`Nächster Beleg erwartet${bis}`, "badge-quelle");
+    const bis = v.naechste_aktivitaet_datum ? `: bis ${v.naechste_aktivitaet_datum}` : "";
+    return badge(`Nächste Rechnung erwartet${bis}`, "badge-quelle");
   }
   return badge("Nächste Aktivität unbekannt", "badge-quelle");
+}
+
+function belegNachId(id) {
+  return letzteBelege.find((b) => b.id === id) || null;
 }
 
 function badge(text, klasse) {
@@ -132,9 +152,11 @@ function belegKarte(b) {
   // und Technikdetails stehen in der Detailansicht.
   const karte = document.createElement("div");
   karte.className = "beleg";
-  // Anbieter nur bei ausreichender Sicherheit; sonst ehrlich "Anbieter
-  // nicht eindeutig" mit dem Dateinamen zur Unterscheidung.
-  const titel = b.felder.anbieter.wert || "Anbieter nicht eindeutig";
+  // Der Nutzer sieht das Produkt, nicht primaer die juristische
+  // Gesellschaft; ohne belastbares Produkt ehrlich "Produkt nicht
+  // eindeutig" mit dem Dateinamen zur Unterscheidung.
+  const titel = (b.felder.produkt && b.felder.produkt.wert)
+    || b.felder.anbieter.wert || "Produkt nicht eindeutig";
   const [label, klasse] = AUSGANG_LABEL[b.ausgang] || [b.ausgang, "badge-quelle"];
 
   const z1 = document.createElement("div");
@@ -148,7 +170,9 @@ function belegKarte(b) {
     metaTeile.push(`${b.felder.betrag.wert} ${b.felder.waehrung.wert || ""}`.trim());
   }
   if (b.felder.datum.wert) metaTeile.push(b.felder.datum.wert);
-  if (!b.felder.anbieter.wert) metaTeile.push(b.dateiname);
+  if (!b.felder.anbieter.wert && !(b.felder.produkt && b.felder.produkt.wert)) {
+    metaTeile.push(b.dateiname);
+  }
   if (metaTeile.length > 0) {
     const meta = document.createElement("span");
     meta.className = "beleg-meta";
@@ -286,24 +310,52 @@ function renderBelege(belege) {
   }
 }
 
+function aboKostenText(r) {
+  if (!r.betrag) return null;
+  const betrag = `${r.betrag} ${r.waehrung || ""}`.trim();
+  // Vorsichtige Wortwahl: nur bei belastbarem Intervall "je Monat/Jahr";
+  // eine Abo-Bestätigung nennt einen Preis, aber keine exportierten Kosten.
+  if (r.typ === "abo_bestaetigung") return `Preis laut Bestätigung: ${betrag}`;
+  if (r.abrechnung === "monatlich") return `${betrag} je Monat`;
+  if (r.abrechnung === "jährlich") return `${betrag} je Jahr`;
+  return `Letzter Rechnungsbetrag: ${betrag}`;
+}
+
+function aboEreignisText(r) {
+  // "Nächste Abbuchung" nur bei ausdrücklich belegtem Datum; eine aus dem
+  // Leistungszeitraum abgeleitete Erwartung ist keine Zahlungszusage.
+  if (r.naechste_abbuchung) return `Nächste Abbuchung: ${r.naechste_abbuchung}`;
+  if (r.naechste_rechnung) return `Nächste Rechnung erwartet: ${r.naechste_rechnung}`;
+  return null;
+}
+
 function renderRadar(radar) {
   const liste = $("radar-liste");
   liste.textContent = "";
   $("radar-leer").hidden = radar.length > 0;
   radar.forEach((r) => {
     const li = document.createElement("li");
-    li.className = "radar-karte";
-    // Titel enthaelt ausschliesslich den Anbieter (oder den ehrlichen
-    // Platzhalter); Betrag, Zeitraum und Status stehen in der zweiten Zeile.
+    const karte = document.createElement("details");
+    karte.className = "abo-karte";
+    const kopf = document.createElement("summary");
+    kopf.className = "abo-kopf";
+    kopf.setAttribute("aria-expanded", "false");
+    karte.addEventListener("toggle", () => {
+      kopf.setAttribute("aria-expanded", String(karte.open));
+    });
+
     const name = document.createElement("div");
     name.className = "radar-name";
-    name.textContent = r.anbieter || "Anbieter nicht eindeutig";
-    li.appendChild(name);
+    name.textContent = r.produkt || "Produkt nicht eindeutig";
+    kopf.appendChild(name);
+
     const zeile2 = document.createElement("div");
     zeile2.className = "radar-zeile2";
     const teile = [];
-    if (r.betrag) teile.push(`${r.betrag} ${r.waehrung || ""}`.trim());
-    if (r.zeitraum && r.zeitraum !== "unbekannt") teile.push(r.zeitraum);
+    if (r.tarif) teile.push(r.tarif);
+    if (r.abrechnung) teile.push(`Abrechnung: ${r.abrechnung}`);
+    const kosten = aboKostenText(r);
+    if (kosten) teile.push(kosten);
     if (teile.length > 0) {
       const meta = document.createElement("span");
       meta.className = "radar-betrag";
@@ -317,13 +369,87 @@ function renderRadar(radar) {
       const [label, klasse] = eintrag;
       zeile2.appendChild(badge(label, klasse));
     }
-    li.appendChild(zeile2);
+    kopf.appendChild(zeile2);
+
+    const ereignis = aboEreignisText(r);
+    if (ereignis) {
+      const zeile3 = document.createElement("div");
+      zeile3.className = "radar-ereignis";
+      zeile3.textContent = ereignis;
+      kopf.appendChild(zeile3);
+    }
+    karte.appendChild(kopf);
+
+    const details = document.createElement("div");
+    details.className = "abo-details";
+    const dl = document.createElement("dl");
+    dl.className = "abo-feldliste";
+    [
+      ["Rechnungsaussteller", r.rechnungsaussteller],
+      ["Abrechnung über", r.abrechnungskanal],
+      ["Bezahlt über", r.zahlungsdienst],
+      ["Letzte Rechnung", r.letzte_rechnung],
+      ["Leistungszeitraum", r.zeitraum],
+      ["Nächste Abbuchung", r.naechste_abbuchung],
+      ["Nächste Rechnung erwartet", r.naechste_rechnung],
+      ["Nächster Schritt", r.reviewstatus === "offen" ? r.review_aufgabe : null],
+    ].forEach(([label, wert]) => {
+      if (!wert) return;
+      const dt = document.createElement("dt");
+      dt.textContent = label;
+      const dd = document.createElement("dd");
+      dd.textContent = wert;
+      dl.append(dt, dd);
+    });
+    details.appendChild(dl);
     if (r.begruendung) {
       const beg = document.createElement("div");
       beg.className = "radar-begruendung";
       beg.textContent = r.begruendung;
-      li.appendChild(beg);
+      details.appendChild(beg);
     }
+    if (r.dokumente && r.dokumente.length > 0) {
+      const doks = document.createElement("div");
+      doks.className = "abo-dokumente";
+      doks.textContent = "Dokumente: ";
+      r.dokumente.forEach((d, index) => {
+        if (index > 0) doks.appendChild(document.createTextNode(", "));
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "dublette-link";
+        btn.textContent = d.dateiname;
+        btn.addEventListener("click", () => {
+          const beleg = belegNachId(d.beleg_id);
+          if (beleg) detailOeffnen(beleg);
+        });
+        doks.appendChild(btn);
+      });
+      details.appendChild(doks);
+    }
+    const aktionen = document.createElement("div");
+    aktionen.className = "beleg-aktionen";
+    if (r.original_pdf_url) {
+      const link = document.createElement("a");
+      link.className = "btn btn-pdf btn-klein";
+      link.href = r.original_pdf_url;
+      link.target = "_blank";
+      link.rel = "noopener";
+      link.textContent = "Original-PDF";
+      aktionen.appendChild(link);
+    }
+    const detailsBtn = document.createElement("button");
+    detailsBtn.type = "button";
+    detailsBtn.className = "btn btn-sekundaer btn-klein";
+    detailsBtn.textContent = "Details und Agentendetails";
+    detailsBtn.addEventListener("click", () => {
+      const beleg = belegNachId(r.beleg_id);
+      if (beleg) detailOeffnen(beleg);
+    });
+    aktionen.appendChild(detailsBtn);
+    details.appendChild(aktionen);
+    karte.appendChild(details);
+
+    li.appendChild(karte);
     liste.appendChild(li);
   });
 }
@@ -345,9 +471,10 @@ function renderAudit(audit) {
 /* ---------- Detailansicht ---------- */
 
 function detailOeffnen(b) {
-  const anbieter = b.felder.anbieter.wert || "Anbieter nicht eindeutig";
+  const titel = (b.felder.produkt && b.felder.produkt.wert)
+    || b.felder.anbieter.wert || "Produkt nicht eindeutig";
   const [label, klasse] = AUSGANG_LABEL[b.ausgang] || [b.ausgang, "badge-quelle"];
-  $("detail-titel").textContent = anbieter;
+  $("detail-titel").textContent = titel;
 
   // Sofort sichtbare Meta-Zeile: Dokumentart, Status, Betrag und Datum.
   const metaZeile = $("detail-meta");
@@ -392,7 +519,7 @@ function detailOeffnen(b) {
   dl.textContent = "";
   Object.entries(b.felder).forEach(([feld, info]) => {
     const dt = document.createElement("dt");
-    dt.textContent = feld;
+    dt.textContent = FELD_LABEL[feld] || feld;
     const dd = document.createElement("dd");
     if (info.wert === null) {
       const fehlt = document.createElement("span");
@@ -587,13 +714,16 @@ $("datei-input").addEventListener("change", (e) => {
 let aktuellerKorrekturBeleg = null;
 
 const KORREKTUR_FELDER = [
-  ["anbieter", "Anbieter"],
+  ["produkt", "Produkt"],
+  ["anbieter", "Rechnungsaussteller"],
   ["referenz", "Referenz oder Rechnungsnummer"],
   ["datum", "Datum"],
   ["betrag", "Betrag"],
   ["waehrung", "Währung"],
   ["zeitraum", "Leistungszeitraum"],
   ["tarif", "Tarif oder Beschreibung"],
+  ["abrechnungsintervall", "Abrechnung"],
+  ["naechste_abbuchung", "Nächste Abbuchung (nur wenn im Original belegt)"],
 ];
 
 const KORREKTUR_AKTIONEN = [
@@ -663,9 +793,43 @@ function korrekturOeffnen() {
   if (!b) return;
   const container = $("korrektur-felder");
   container.textContent = "";
+
+  // Standardmaessig sichtbar sind nur fehlende, unsichere oder
+  // pruefenswerte Felder; belastbar erkannte Werte liegen im geschlossenen
+  // Bereich "Bereits erkannt".
+  const problematisch = (feld) => {
+    const info = b.felder[feld];
+    if (!info || info.wert === null) return true;
+    const punkt = b.checkliste.find((p) => p.feld === feld);
+    return punkt ? !punkt.erfuellt : false;
+  };
+
+  const erkannt = document.createElement("details");
+  erkannt.className = "korrektur-erkannt";
+  const erkanntTitel = document.createElement("summary");
+  erkanntTitel.textContent = "Bereits erkannt";
+  erkannt.appendChild(erkanntTitel);
+
+  let offene = 0;
   KORREKTUR_FELDER.forEach(([feld, labelText]) => {
-    container.appendChild(korrekturZeile(feld, labelText, b.felder[feld]));
+    const info = b.felder[feld] || { wert: null, herkunft: "fehlt" };
+    const zeile = korrekturZeile(feld, labelText, info);
+    if (problematisch(feld)) {
+      offene += 1;
+      container.appendChild(zeile);
+    } else {
+      erkannt.appendChild(zeile);
+    }
   });
+  if (offene === 0) {
+    const hinweis = document.createElement("p");
+    hinweis.className = "korrektur-hinweis";
+    hinweis.textContent = "Keine offenen Angaben. Bereits erkannte Werte lassen sich unten prüfen.";
+    container.appendChild(hinweis);
+  }
+  if (erkannt.childElementCount > 1) {
+    container.appendChild(erkannt);
+  }
   $("korrektur-fehler").hidden = true;
   $("detail-overlay").hidden = true;
   $("korrektur-overlay").hidden = false;

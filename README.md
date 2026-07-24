@@ -7,11 +7,11 @@
 > Stand Arbeitsblock 4 (23.07.2026): End-to-End-Vertical-Slice läuft,
 > jetzt inklusive EML-Upload. Zentrale, manuelle Kosten-Inbox: Belege und
 > heruntergeladene Rechnungs-E-Mails werden manuell zugeführt.
-> OptiTax ist ein regelbasierter, zustandsabhängiger Agent. Er
-> erstellt pro Eingang einen Ausführungsplan, wählt notwendige
-> Prüfwerkzeuge, überspringt ungeeignete Schritte, verbindet die Dokumente
-> einer E-Mail zu einem Kostenvorgang und entscheidet anhand von Evidenz
-> und vorhandenem Bestand über die nächste Aktion.
+> OptiTax ist ein regelbasierter, zustandsabhängiger Agent in einem
+> lokalen Finanz-Tool. Er erstellt pro Eingang einen Plan, wählt
+> Prüfwerkzeuge, revidiert den Plan anhand neuer Evidenz, nutzt den
+> vorhandenen Bestand und entscheidet die nächste Aktion. Er ist nicht
+> selbstlernend und gibt keine Steuer- oder Compliance-Garantie.
 
 ## Das Problem
 

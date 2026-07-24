@@ -22,8 +22,13 @@ HERKUNFT_MANUELL_BESTAETIGT = "manuell bestätigt"
 HERKUNFT_NICHT_VORHANDEN = "im Original nicht vorhanden"
 
 # Ausschliesslich fachliche Feldwerte sind korrigierbar -- nie Status,
-# Hashes, Pfade oder sonstige Provenienzdaten.
-KORRIGIERBARE_FELDER = ("anbieter", "referenz", "datum", "betrag", "waehrung", "zeitraum", "tarif")
+# Hashes, Pfade oder sonstige Provenienzdaten. `anbieter` ist fachlich der
+# Rechnungsaussteller; `naechste_abbuchung` ist nur korrigierbar, wenn sie
+# im Original belegt ist (Datum wird serverseitig validiert).
+KORRIGIERBARE_FELDER = (
+    "anbieter", "referenz", "datum", "betrag", "waehrung", "zeitraum", "tarif",
+    "produkt", "abrechnungsintervall", "naechste_abbuchung",
+)
 
 
 def letzte_korrektur_je_feld(korrekturen: list[dict]) -> dict[str, dict]:

@@ -4,7 +4,15 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 
-FELDNAMEN = ["anbieter", "datum", "betrag", "waehrung", "zeitraum", "tarif", "referenz"]
+# Basisfelder aus der Extraktion plus abgeleitete Produktprofil-Felder
+# (kostenprofil.py). `anbieter` bleibt aus Kompatibilitaetsgruenden intern
+# der rechtliche bzw. dokumentierte Rechnungsaussteller; `produkt` ist das
+# verwendete Produkt, das die Oberflaeche primaer zeigt.
+FELDNAMEN = [
+    "anbieter", "datum", "betrag", "waehrung", "zeitraum", "tarif", "referenz",
+    "produkt", "abrechnungskanal", "zahlungsdienst", "abrechnungsintervall",
+    "naechste_abbuchung", "naechste_rechnung",
+]
 
 # Belegstatus (Ausgang der Agentenentscheidung)
 AUSGANG_UEBERNOMMEN = "uebernommen"

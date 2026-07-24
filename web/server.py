@@ -60,6 +60,8 @@ _QUELLENSTATUS_ANZEIGE = {
 # nur als DB-Schluessel verwendet, nie als Pfadbestandteil.
 _BELEG_ORIGINAL_MUSTER = re.compile(r"^/api/belege/([A-Za-z0-9-]{1,64})/original$")
 _BELEG_KORREKTUR_MUSTER = re.compile(r"^/api/belege/([A-Za-z0-9-]{1,64})/korrekturen$")
+# Original-EML-Route: ausschliesslich per Vorgangs-ID, nie per Pfad.
+_VORGANG_EML_MUSTER = re.compile(r"^/api/vorgaenge/([A-Za-z0-9-]{1,64})/original-eml$")
 _WAEHRUNG_MUSTER = re.compile(r"^[A-Z]{3}$")
 _MAX_KORREKTUR_FELDLAENGE = 200
 _MAX_KORREKTUR_BODY = 64 * 1024
@@ -115,7 +117,26 @@ def _original_pdf_verfuegbar(row: dict) -> bool:
         return False
 
 
-def _beleg_zu_json(row: dict, plaene: list[dict], korrekturliste: list[dict] | None = None) -> dict:
+def _original_eml_verfuegbar(conn, row: dict) -> bool:
+    """Nur ein Mailtext-Beleg mit Vorgang und sicher aufloesbarer,
+    vorhandener EML-Rohdatei bekommt eine Download-URL. PDF-Kinder einer
+    EML behalten stattdessen ihr Original-PDF am Dokument."""
+    if row["dateityp"] != "MAILTEXT" or not row["vorgang_id"]:
+        return False
+    vorgang = conn.execute(
+        "SELECT eml_storage_key FROM vorgaenge WHERE id = ?", (row["vorgang_id"],)
+    ).fetchone()
+    if vorgang is None or not vorgang["eml_storage_key"]:
+        return False
+    try:
+        return speicher.pfad_aus_key(vorgang["eml_storage_key"]).is_file()
+    except (dateinamen.UnsichererPfadFehler, OSError):
+        return False
+
+
+def _beleg_zu_json(
+    row: dict, plaene: list[dict], korrekturliste: list[dict] | None = None, conn=None
+) -> dict:
     # Effektive Felder (automatische Rohwerte plus letzte gueltige manuelle
     # Korrektur) sind die einzige fachliche Sicht der API.
     auto_felder = json.loads(row["felder_json"])
@@ -134,9 +155,13 @@ def _beleg_zu_json(row: dict, plaene: list[dict], korrekturliste: list[dict] | N
     ergebnis_zusatz = (
         {"original_pdf_url": f"/api/belege/{row['id']}/original"} if pdf_verfuegbar else {}
     )
+    eml_verfuegbar = _original_eml_verfuegbar(conn, row) if conn is not None else False
+    if eml_verfuegbar:
+        ergebnis_zusatz["original_eml_url"] = f"/api/vorgaenge/{row['vorgang_id']}/original-eml"
     return {
         **ergebnis_zusatz,
         "original_pdf_verfuegbar": pdf_verfuegbar,
+        "original_eml_verfuegbar": eml_verfuegbar,
         # Berechnetes Feld aus der zentralen Exportregel -- die UI leitet
         # "Für Export bereit" nie selbst aus Statuswerten ab.
         "exportbereit": exportregeln.exportfaehig(
@@ -347,6 +372,45 @@ class BelegwaechterHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(inhalt)
 
+    def _vorgang_original_eml(self, vorgang_id: str) -> None:
+        """Liefert die unveraendert gespeicherte Original-EML eines Vorgangs
+        als Download. Nur per Vorgangs-ID; der eml_storage_key stammt nie
+        aus der URL und wird ausschliesslich ueber speicher.pfad_aus_key()
+        aufgeloest. Attachment statt Inline: fremder Mail-/HTML-Inhalt wird
+        nie im OptiTax-DOM dargestellt."""
+        nicht_gefunden = {"fehler": "nicht gefunden"}
+        conn = speicher.verbindung()
+        row = conn.execute(
+            "SELECT eml_dateiname, eml_storage_key FROM vorgaenge WHERE id = ?",
+            (vorgang_id,),
+        ).fetchone()
+        conn.close()
+        if row is None or not row["eml_storage_key"]:
+            self._json(404, nicht_gefunden)
+            return
+        try:
+            pfad = speicher.pfad_aus_key(row["eml_storage_key"])
+            inhalt = pfad.read_bytes()
+        except (dateinamen.UnsichererPfadFehler, OSError):
+            self._json(404, nicht_gefunden)
+            return
+        from belegwaechter import mailparser
+
+        if not mailparser.ist_eml(inhalt):
+            self._json(404, nicht_gefunden)
+            return
+        anzeigename = dateinamen.speichername(row["eml_dateiname"] or "vorgang.eml")
+        if not anzeigename.lower().endswith(".eml"):
+            anzeigename += ".eml"
+        self.send_response(200)
+        self.send_header("Content-Type", "message/rfc822")
+        self.send_header("Content-Disposition", f'attachment; filename="{anzeigename}"')
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Length", str(len(inhalt)))
+        self.end_headers()
+        self.wfile.write(inhalt)
+
     def _korrektur_wert_pruefen(self, feld: str, wert) -> tuple[str | None, str | None]:
         """Serverseitige Validierung eines manuell gesetzten Werts. Liefert
         (normalisierter_wert, fehlermeldung). Alle Werte werden
@@ -462,6 +526,7 @@ class BelegwaechterHandler(BaseHTTPRequestHandler):
                 row_neu,
                 speicher.plaene_fuer_beleg(conn, beleg_id),
                 speicher.korrekturen_fuer_beleg(conn, beleg_id),
+                conn=conn,
             )
         finally:
             conn.close()
@@ -486,6 +551,16 @@ class BelegwaechterHandler(BaseHTTPRequestHandler):
                 self._json(code, fehler)
                 return
             self._beleg_original(treffer.group(1))
+        elif self.path.startswith("/api/vorgaenge/"):
+            treffer = _VORGANG_EML_MUSTER.match(self.path)
+            if treffer is None:
+                self._json(404, {"fehler": "nicht gefunden"})
+                return
+            erlaubt, code, fehler = _zugriff_erlaubt(self, veraendernd=False)
+            if not erlaubt:
+                self._json(code, fehler)
+                return
+            self._vorgang_original_eml(treffer.group(1))
         elif self.path == "/api/ergebnis":
             erlaubt, code, fehler = _zugriff_erlaubt(self, veraendernd=False)
             if not erlaubt:
@@ -497,6 +572,7 @@ class BelegwaechterHandler(BaseHTTPRequestHandler):
                     r,
                     speicher.plaene_fuer_beleg(conn, r["id"]),
                     speicher.korrekturen_fuer_beleg(conn, r["id"]),
+                    conn=conn,
                 )
                 for r in speicher.alle_belege(conn)
             ]

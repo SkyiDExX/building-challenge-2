@@ -561,6 +561,9 @@ main { max-width: 1120px; margin: 0 auto; padding: 8px 20px 40px; }
 #detail-felder-liste dt { color: var(--text-leise); }
 #detail-felder-liste dd { margin: 0; overflow-wrap: anywhere; }
 .feld-herkunft { color: var(--text-leise); font-size: 0.8rem; }
+/* Kleines, verstaendliches Label fuer manuell ergaenzte, bestaetigte oder
+   als nicht vorhanden bestaetigte Werte. */
+.feld-manuell { color: var(--brand-orange-hell); }
 .feld-fehlt { color: var(--gelb-text); font-weight: 600; }
 
 #detail-checkliste { list-style: none; margin: 0; padding: 0; font-size: 0.9rem; display: flex; flex-direction: column; gap: 3px; }
@@ -586,6 +589,36 @@ main { max-width: 1120px; margin: 0 auto; padding: 8px 20px 40px; }
   color: var(--text-leise);
   font-size: 0.82rem;
 }
+
+/* ---- Korrektur-Dialog: Angaben pruefen und ergaenzen ---- */
+.dialog-korrektur { max-width: 640px; }
+.korrektur-hinweis { margin: 12px 0 0; color: var(--text-leise); font-size: 0.88rem; }
+.korrektur-zeile {
+  border: 1px solid var(--linie);
+  border-radius: 12px;
+  padding: 10px 12px;
+  margin-top: 10px;
+  background: var(--glas-karte);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.korrektur-feldkopf { display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.korrektur-label { font-weight: 600; }
+.korrektur-aktuell { color: var(--text-leise); font-size: 0.85rem; overflow-wrap: anywhere; }
+.korrektur-aktion,
+.korrektur-eingabe input {
+  font: inherit;
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--linie);
+  border-radius: 8px;
+  padding: 6px 10px;
+  max-width: 100%;
+}
+.korrektur-aktion option { color: #0d1522; }
+.korrektur-eingabe { display: flex; gap: 8px; flex-wrap: wrap; }
+.korrektur-eingabe input { flex: 1 1 160px; min-width: 0; }
 
 /* ---- Scrollbars (Markenoptik, nie versteckt) ----
    Nur der Inhaltsbereich des Modals und lange interne Bereiche scrollen:

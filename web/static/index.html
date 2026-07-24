@@ -94,7 +94,9 @@
         <p id="detail-entscheidung" class="entscheidung"></p>
         <p id="detail-review-hinweis" class="review-hinweis" hidden></p>
         <div class="detail-aktionen">
+          <button id="detail-korrektur-btn" class="btn btn-primaer" type="button" hidden>Angaben prüfen und ergänzen</button>
           <a id="detail-pdf-btn" class="btn btn-pdf" target="_blank" rel="noopener" hidden>Original-PDF öffnen</a>
+          <a id="detail-eml-btn" class="btn btn-pdf" download hidden>Original-E-Mail herunterladen</a>
         </div>
       </div>
       <details id="pruefnachweis-details" class="klapp-bereich">
@@ -124,6 +126,25 @@
           </details>
         </div>
       </details>
+    </div>
+  </div>
+</div>
+
+<!-- Korrektur-Dialog: Angaben prüfen und ergänzen -->
+<div id="korrektur-overlay" class="detail-overlay" hidden>
+  <div class="detail dialog-korrektur" role="dialog" aria-modal="true" aria-labelledby="korrektur-titel">
+    <div class="detail-kopf">
+      <h3 id="korrektur-titel">Angaben prüfen und ergänzen</h3>
+      <button id="korrektur-schliessen" class="schliessen-btn" type="button" aria-label="Schließen" title="Schließen"><img src="/assets/brand/optitax-close-x-32.png" width="28" height="28" alt=""></button>
+    </div>
+    <div class="detail-inhalt">
+      <p class="korrektur-hinweis">Das Original und die automatisch erkannten Werte bleiben unverändert erhalten. Jede Änderung wird protokolliert, danach prüft der Agent den Beleg erneut.</p>
+      <div id="korrektur-felder"></div>
+      <div id="korrektur-fehler" class="fehler-hinweis" role="alert" hidden></div>
+      <div class="dialog-aktionen">
+        <button id="korrektur-speichern" class="btn btn-primaer" type="button">Speichern und neu prüfen</button>
+        <button id="korrektur-abbrechen" class="btn btn-sekundaer" type="button">Abbrechen</button>
+      </div>
     </div>
   </div>
 </div>

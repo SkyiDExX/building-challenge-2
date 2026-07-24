@@ -3130,5 +3130,116 @@ class KorrekturValidierungTest(HttpTestCase):
         self.assertEqual(antwort["felder"]["anbieter"]["wert"], "Neu-Name AG")
 
 
+class EmlOriginalRouteTest(HttpTestCase):
+    """Original-E-Mail-Download: nur per Vorgangs-ID, attachment mit
+    message/rfc822, wertfreie 404, keine Pfadlecks; Mailtext-Belege
+    erhalten die URL, PDF-Belege nicht."""
+
+    def _belege(self) -> list[dict]:
+        status, body = self._senden("GET", "/api/ergebnis", host=f"127.0.0.1:{self.port}")
+        self.assertEqual(status, 200)
+        return json.loads(body)["belege"]
+
+    def test_mailtext_beleg_bietet_eml_download(self):
+        self._upload_ok(
+            [("domainly_nur_html_rechnung.eml", _lesen("domainly_nur_html_rechnung.eml"))]
+        )
+        mailtext = next(b for b in self._belege() if b["dateityp"] == "MAILTEXT")
+        self.assertTrue(mailtext["original_eml_verfuegbar"])
+        url = mailtext["original_eml_url"]
+        self.assertTrue(url.startswith("/api/vorgaenge/"))
+        self.assertNotRegex(url, r"[A-Za-z]:[\\/]")
+
+        conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=10)
+        conn.request("GET", url)
+        resp = conn.getresponse()
+        daten = resp.read()
+        headers = dict(resp.getheaders())
+        conn.close()
+        self.assertEqual(resp.status, 200)
+        self.assertEqual(headers.get("Content-Type"), "message/rfc822")
+        self.assertTrue(headers.get("Content-Disposition", "").startswith("attachment"))
+        self.assertEqual(headers.get("X-Content-Type-Options"), "nosniff")
+        self.assertEqual(headers.get("Cache-Control"), "no-store")
+        self.assertGreater(len(daten), 100)
+        for wert in headers.values():
+            self.assertNotRegex(wert, r"[A-Za-z]:[\\/]")
+            self.assertNotIn("runtime", wert)
+
+    def test_pdf_beleg_hat_keinen_eml_download(self):
+        self._upload_ok([("cloudbasis_juli.pdf", _lesen("cloudbasis_juli.pdf"))])
+        beleg = self._belege()[0]
+        self.assertFalse(beleg["original_eml_verfuegbar"])
+        self.assertNotIn("original_eml_url", beleg)
+
+    def test_pdf_kind_einer_eml_behaelt_pdf_statt_eml(self):
+        self._upload_ok(
+            [("cloudbasis_rechnung_und_zahlung.eml", _lesen("cloudbasis_rechnung_und_zahlung.eml"))]
+        )
+        pdf_kinder = [b for b in self._belege() if b["dateityp"] == "PDF"]
+        self.assertGreaterEqual(len(pdf_kinder), 1)
+        for beleg in pdf_kinder:
+            self.assertTrue(beleg["original_pdf_verfuegbar"])
+            self.assertFalse(beleg["original_eml_verfuegbar"])
+
+    def test_unbekannter_vorgang_liefert_wertfreie_404(self):
+        status, daten = self._senden(
+            "GET", "/api/vorgaenge/00000000-0000-0000-0000-000000000000/original-eml",
+            host=f"127.0.0.1:{self.port}",
+        )
+        self.assertEqual(status, 404)
+        self.assertEqual(json.loads(daten), {"fehler": "nicht gefunden"})
+
+
+class KorrekturUiTest(unittest.TestCase):
+    """Statische Pruefungen der Korrektur- und Exportstatus-Oberflaeche."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.html = (REPO_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
+        cls.js = (REPO_ROOT / "web" / "static" / "app.js").read_text(encoding="utf-8")
+        cls.css = (REPO_ROOT / "web" / "static" / "styles.css").read_text(encoding="utf-8")
+
+    def test_korrektur_dialog_vorhanden_und_geschlossen(self):
+        treffer = re.search(r'<div id="korrektur-overlay"[^>]*>', self.html)
+        self.assertIsNotNone(treffer)
+        self.assertIn("hidden", treffer.group(0))
+        self.assertIn("Angaben prüfen und ergänzen", self.html)
+        self.assertIn('id="korrektur-abbrechen"', self.html)
+        self.assertIn('id="korrektur-schliessen"', self.html)
+
+    def test_dialog_nutzt_nur_textcontent_und_api_aktionen(self):
+        self.assertIn("korrekturZeile", self.js)
+        self.assertNotIn("innerHTML", self.js, "Kein HTML-Rendering von Nutzereingaben")
+        for aktion in ("setzen", "bestaetigen", "nicht_vorhanden", "zuruecksetzen"):
+            self.assertIn(f'"{aktion}"', self.js)
+        self.assertIn("/korrekturen", self.js)
+
+    def test_exportstatus_anzeigen_vorhanden(self):
+        self.assertIn('"Für Export bereit"', self.js)
+        self.assertIn('"Prüfung empfohlen"', self.js)
+        self.assertIn('"Nicht exportbereit"', self.js)
+        self.assertIn("b.exportbereit", self.js)
+
+    def test_herkunftslabels_und_zusammenfassung(self):
+        self.assertIn("feld-manuell", self.js)
+        self.assertIn("feld-manuell", self.css)
+        self.assertIn("kritischen Angaben vollständig", self.js)
+        self.assertIn("Im Original nicht vorhanden:", self.js)
+
+    def test_eml_download_button_sicher(self):
+        treffer = re.search(r'<a id="detail-eml-btn"[^>]*>', self.html)
+        self.assertIsNotNone(treffer)
+        self.assertIn("download", treffer.group(0))
+        self.assertIn("hidden", treffer.group(0))
+        self.assertIn("b.original_eml_verfuegbar && b.original_eml_url", self.js)
+
+    def test_korrektur_button_nur_bei_offenen_faellen(self):
+        self.assertIn('korrekturBtn.hidden = !(b.reviewstatus === "offen"', self.js)
+
+    def test_esc_schliesst_korrektur_dialog(self):
+        self.assertIn('if (!$("korrektur-overlay").hidden) korrekturSchliessen();', self.js)
+
+
 if __name__ == "__main__":
     unittest.main()

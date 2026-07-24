@@ -97,6 +97,35 @@ function pdfOriginalLink(b, klassen) {
   return link;
 }
 
+function emlOriginalLink(b, klassen) {
+  const link = document.createElement("a");
+  link.className = klassen;
+  link.href = b.original_eml_url;
+  link.setAttribute("download", "");
+  link.rel = "noopener";
+  link.textContent = "Original-E-Mail";
+  link.setAttribute(
+    "aria-label",
+    `Original-E-Mail zu ${b.felder.anbieter.wert || b.dateiname} herunterladen`
+  );
+  return link;
+}
+
+function exportBadges(b) {
+  // Exportbereitschaft kommt ausschliesslich aus dem serverseitig
+  // berechneten Feld (zentrale Exportregel), nie aus Statuswerten.
+  const badges = [];
+  if (b.exportbereit) {
+    badges.push(badge("Für Export bereit", "badge-fertig"));
+    if (b.reviewstatus === "offen") {
+      badges.push(badge("Prüfung empfohlen", "badge-review"));
+    }
+  } else if (b.dokumentart === "rechnung" || b.dokumentart === "sonstiger_kostennachweis") {
+    badges.push(badge("Nicht exportbereit", "badge-quelle"));
+  }
+  return badges;
+}
+
 function belegKarte(b) {
   // Kompakte Karte: Titel, Betrag/Datum, Dokumentart, Status, offene
   // Aufgabe und Aktionen. Der vollstaendige Entscheidungstext, Dateiname
@@ -130,6 +159,7 @@ function belegKarte(b) {
   if (b.dokumentart && DOKUMENTART_LABEL[b.dokumentart]) {
     z1.appendChild(badge(DOKUMENTART_LABEL[b.dokumentart], "badge-quelle"));
   }
+  exportBadges(b).forEach((eintrag) => z1.appendChild(eintrag));
   karte.appendChild(z1);
 
   if (b.reviewstatus === "offen" && b.review_aufgabe) {
@@ -150,6 +180,9 @@ function belegKarte(b) {
   aktionen.appendChild(detailsBtn);
   if (b.original_pdf_verfuegbar && b.original_pdf_url) {
     aktionen.appendChild(pdfOriginalLink(b, "btn btn-pdf btn-klein"));
+  }
+  if (b.original_eml_verfuegbar && b.original_eml_url) {
+    aktionen.appendChild(emlOriginalLink(b, "btn btn-pdf btn-klein"));
   }
   karte.appendChild(aktionen);
   return karte;
@@ -323,6 +356,7 @@ function detailOeffnen(b) {
     metaZeile.appendChild(badge(DOKUMENTART_LABEL[b.dokumentart], "badge-quelle"));
   }
   metaZeile.appendChild(badge(label, klasse));
+  exportBadges(b).forEach((eintrag) => metaZeile.appendChild(eintrag));
   const metaTeile = [];
   if (b.felder.betrag.wert) {
     metaTeile.push(`${b.felder.betrag.wert} ${b.felder.waehrung.wert || ""}`.trim());
@@ -369,6 +403,9 @@ function detailOeffnen(b) {
       dd.textContent = info.wert + " ";
       const h = document.createElement("span");
       h.className = "feld-herkunft";
+      if (info.herkunft.startsWith("manuell") || info.herkunft.startsWith("im Original")) {
+        h.classList.add("feld-manuell");
+      }
       h.textContent = `(${info.herkunft})`;
       dd.appendChild(h);
     }
@@ -391,7 +428,17 @@ function detailOeffnen(b) {
 
   const feldwerte = Object.values(b.felder);
   const erkannt = feldwerte.filter((f) => f.wert !== null).length;
-  $("detail-erkannt").textContent = `${erkannt} von ${feldwerte.length} Angaben erkannt.`;
+  const kritische = b.checkliste.filter((p) => p.kategorie === "kritisch");
+  const nichtVorhanden = b.checkliste.filter((p) => p.nicht_vorhanden).map((p) => p.name);
+  let zusammenfassung = `${erkannt} von ${feldwerte.length} Angaben erkannt.`;
+  if (kritische.length > 0) {
+    const kritischOk = kritische.filter((p) => p.erfuellt).length;
+    zusammenfassung = `${kritischOk} von ${kritische.length} kritischen Angaben vollständig. ` + zusammenfassung;
+  }
+  if (nichtVorhanden.length > 0) {
+    zusammenfassung += ` Im Original nicht vorhanden: ${nichtVorhanden.join(", ")}.`;
+  }
+  $("detail-erkannt").textContent = zusammenfassung;
 
   $("detail-entscheidung").textContent = b.begruendung;
 
@@ -414,6 +461,18 @@ function detailOeffnen(b) {
     pdfBtn.removeAttribute("href");
     pdfBtn.hidden = true;
   }
+  const emlBtn = $("detail-eml-btn");
+  if (b.original_eml_verfuegbar && b.original_eml_url) {
+    emlBtn.href = b.original_eml_url;
+    emlBtn.hidden = false;
+  } else {
+    emlBtn.removeAttribute("href");
+    emlBtn.hidden = true;
+  }
+  const korrekturBtn = $("detail-korrektur-btn");
+  korrekturBtn.hidden = !(b.reviewstatus === "offen" &&
+    (b.ausgang === "review" || b.ausgang === "uebernommen"));
+  aktuellerKorrekturBeleg = b;
 
   const planContainer = $("detail-plan");
   planContainer.textContent = "";
@@ -523,6 +582,158 @@ $("datei-input").addEventListener("change", (e) => {
   })
 );
 
+/* ---------- Korrektur-Dialog: Angaben prüfen und ergänzen ---------- */
+
+let aktuellerKorrekturBeleg = null;
+
+const KORREKTUR_FELDER = [
+  ["anbieter", "Anbieter"],
+  ["referenz", "Referenz oder Rechnungsnummer"],
+  ["datum", "Datum"],
+  ["betrag", "Betrag"],
+  ["waehrung", "Währung"],
+  ["zeitraum", "Leistungszeitraum"],
+  ["tarif", "Tarif oder Beschreibung"],
+];
+
+const KORREKTUR_AKTIONEN = [
+  ["unveraendert", "Unverändert lassen"],
+  ["setzen", "Wert eintragen"],
+  ["bestaetigen", "Erkannten Wert bestätigen"],
+  ["nicht_vorhanden", "Im Original nicht vorhanden"],
+  ["zuruecksetzen", "Zurück zum erkannten Wert"],
+];
+
+function korrekturZeile(feld, labelText, info) {
+  const zeile = document.createElement("div");
+  zeile.className = "korrektur-zeile";
+  const kopf = document.createElement("div");
+  kopf.className = "korrektur-feldkopf";
+  const label = document.createElement("span");
+  label.className = "korrektur-label";
+  label.textContent = labelText;
+  const aktuell = document.createElement("span");
+  aktuell.className = "korrektur-aktuell";
+  aktuell.textContent = info.wert === null ? `fehlt (${info.herkunft})` : `${info.wert} (${info.herkunft})`;
+  kopf.append(label, aktuell);
+
+  const auswahl = document.createElement("select");
+  auswahl.className = "korrektur-aktion";
+  auswahl.setAttribute("aria-label", `Aktion für ${labelText}`);
+  KORREKTUR_AKTIONEN.forEach(([wert, text]) => {
+    const option = document.createElement("option");
+    option.value = wert;
+    option.textContent = text;
+    auswahl.appendChild(option);
+  });
+
+  const eingabe = document.createElement("div");
+  eingabe.className = "korrektur-eingabe";
+  eingabe.hidden = true;
+  if (feld === "zeitraum") {
+    const von = document.createElement("input");
+    von.type = "text";
+    von.placeholder = "von, z.B. 01.08.2026";
+    von.setAttribute("aria-label", "Leistungszeitraum von");
+    von.dataset.teil = "von";
+    const bis = document.createElement("input");
+    bis.type = "text";
+    bis.placeholder = "bis, z.B. 31.08.2026";
+    bis.setAttribute("aria-label", "Leistungszeitraum bis");
+    bis.dataset.teil = "bis";
+    eingabe.append(von, bis);
+  } else {
+    const input = document.createElement("input");
+    input.type = "text";
+    input.maxLength = 200;
+    input.setAttribute("aria-label", `Neuer Wert für ${labelText}`);
+    eingabe.appendChild(input);
+  }
+  auswahl.addEventListener("change", () => {
+    eingabe.hidden = auswahl.value !== "setzen";
+  });
+
+  zeile.append(kopf, auswahl, eingabe);
+  zeile.dataset.feld = feld;
+  return zeile;
+}
+
+function korrekturOeffnen() {
+  const b = aktuellerKorrekturBeleg;
+  if (!b) return;
+  const container = $("korrektur-felder");
+  container.textContent = "";
+  KORREKTUR_FELDER.forEach(([feld, labelText]) => {
+    container.appendChild(korrekturZeile(feld, labelText, b.felder[feld]));
+  });
+  $("korrektur-fehler").hidden = true;
+  $("detail-overlay").hidden = true;
+  $("korrektur-overlay").hidden = false;
+  $("korrektur-schliessen").focus();
+}
+
+function korrekturSchliessen() {
+  $("korrektur-overlay").hidden = true;
+}
+
+async function korrekturSpeichern() {
+  const b = aktuellerKorrekturBeleg;
+  if (!b) return;
+  const felder = {};
+  document.querySelectorAll("#korrektur-felder .korrektur-zeile").forEach((zeile) => {
+    const aktion = zeile.querySelector(".korrektur-aktion").value;
+    if (aktion === "unveraendert") return;
+    const feld = zeile.dataset.feld;
+    if (aktion === "setzen") {
+      if (feld === "zeitraum") {
+        const von = zeile.querySelector('input[data-teil="von"]').value.trim();
+        const bis = zeile.querySelector('input[data-teil="bis"]').value.trim();
+        felder[feld] = { aktion, wert: { von, bis } };
+      } else {
+        felder[feld] = { aktion, wert: zeile.querySelector("input").value.trim() };
+      }
+    } else {
+      felder[feld] = { aktion };
+    }
+  });
+  if (Object.keys(felder).length === 0) {
+    korrekturSchliessen();
+    return;
+  }
+  $("korrektur-speichern").disabled = true;
+  try {
+    const resp = await fetch(`/api/belege/${encodeURIComponent(b.id)}/korrekturen`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ felder }),
+    });
+    const daten = await resp.json();
+    if (!resp.ok) {
+      const fehlerEl = $("korrektur-fehler");
+      fehlerEl.textContent = daten.fehler || "Speichern fehlgeschlagen.";
+      fehlerEl.hidden = false;
+      return;
+    }
+    korrekturSchliessen();
+    await ladeAlles();
+    detailOeffnen(daten.beleg);
+  } catch (err) {
+    const fehlerEl = $("korrektur-fehler");
+    fehlerEl.textContent = "Verbindung zum lokalen Agenten fehlgeschlagen: " + err.message;
+    fehlerEl.hidden = false;
+  } finally {
+    $("korrektur-speichern").disabled = false;
+  }
+}
+
+$("detail-korrektur-btn").addEventListener("click", korrekturOeffnen);
+$("korrektur-schliessen").addEventListener("click", korrekturSchliessen);
+$("korrektur-abbrechen").addEventListener("click", korrekturSchliessen);
+$("korrektur-speichern").addEventListener("click", korrekturSpeichern);
+$("korrektur-overlay").addEventListener("click", (e) => {
+  if (e.target === $("korrektur-overlay")) korrekturSchliessen();
+});
+
 /* ---------- Detail-, Reset- und Export-Ereignisse ---------- */
 
 $("detail-schliessen").addEventListener("click", detailSchliessen);
@@ -548,6 +759,7 @@ document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") {
     if (!$("detail-overlay").hidden) detailSchliessen();
     if (!$("reset-overlay").hidden) $("reset-overlay").hidden = true;
+    if (!$("korrektur-overlay").hidden) korrekturSchliessen();
   }
 });
 

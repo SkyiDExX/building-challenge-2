@@ -118,7 +118,7 @@ _LABEL_ZEILE_MUSTER = re.compile(
     re.IGNORECASE,
 )
 _FAELLIGKEIT_ZEILE_MUSTER = re.compile(
-    r"^(?:f(?:ä|ae)llig\s+am|due\s+(?:on|by|date)|bezahlt\s+am|paid\s+on)\b",
+    r"^(?:f(?:ä|ae)llig\s+am|due\s+(?:on|by|date)|date\s+due|bezahlt\s+am|paid\s+on)\b",
     re.IGNORECASE,
 )
 _DATUM_WERT = rf"(?:{_WERT_DATUM_DE_NUMERISCH}|{_WERT_DATUM_DE_AUSGESCHRIEBEN}|{_WERT_DATUM_EN})"
@@ -127,6 +127,53 @@ _ZEITRAUM_ZEILE_MUSTER = re.compile(
     rf"^{_DATUM_WERT}\s*{_ZEITRAUM_TRENNER}\s*{_DATUM_WERT}$", re.IGNORECASE
 )
 _BETRAG_ZEILE_MUSTER = re.compile(r"^[€$£]?\s*\d[\d.,\s]*\s*(?:[€$£]|[A-Z]{3})?$")
+
+# Explizites Haendler-/Anbieter-Feld (mit Doppelpunkt, damit ein
+# Firmenname wie "Anbieter GmbH" nie als Label gilt): zweite Prioritaet
+# nach einer belastbaren Organisationszeile, vor dem
+# E-Mail-Absender-Fallback.
+_MERCHANT_FELD_MUSTER = re.compile(
+    r"(?:H(?:ä|ae)ndler|Merchant|Anbieter|Verk(?:ä|ae)ufer|Seller)\s*:\s*(.+)",
+    re.IGNORECASE,
+)
+
+# Haeufige kleingeschriebene Funktionswoerter: zwei oder mehr davon deuten
+# auf einen ganzen Satz ("Sie haben eine Zahlung gesendet"), nie auf einen
+# Organisationsnamen. Bewusst generisch, keine vendorspezifischen Regeln.
+_SATZ_FUNKTIONSWOERTER = {
+    "sie", "haben", "eine", "einen", "wurde", "wurden", "ist", "sind",
+    "ihre", "ihr", "wir", "dein", "deine", "hat", "an", "von", "fuer", "für",
+    "you", "have", "your", "has", "been", "was", "were", "this", "the",
+    "a", "an", "is", "are", "we", "to", "from", "for", "sent",
+}
+
+
+def _anbieter_plausibel(zeile: str) -> bool:
+    """Explizite Plausibilitaetspruefung fuer Anbieter-Kandidaten: lehnt
+    satzartige Texte und Kandidaten ab, die fast vollstaendig aus Datums-
+    oder Betragsbestandteilen bestehen. Kurze Organisationsnamen wie
+    'Netlify, Inc.' oder 'Anthropic, PBC' bleiben zulaessig."""
+    woerter = zeile.split()
+    if not woerter:
+        return False
+    # Deutlich satzartige Struktur: zu viele Woerter, mehrere
+    # Funktionswoerter oder ein kleingeschrieben endender Satz mit Punkt.
+    if len(woerter) > 5:
+        return False
+    normalisiert = {w.strip(".,;:!?()").lower() for w in woerter}
+    if len(normalisiert & _SATZ_FUNKTIONSWOERTER) >= 2:
+        return False
+    if zeile.rstrip().endswith((".", "!", "?")) and woerter[-1][:1].islower():
+        return False
+    # Fast vollstaendig aus Datums-/Betragsbestandteilen: nach Entfernen
+    # aller Datumswerte, Ziffern und Waehrungszeichen muessen mindestens
+    # drei Buchstaben Organisationssubstanz uebrig bleiben.
+    rest = re.sub(_DATUM_WERT, " ", zeile, flags=re.IGNORECASE)
+    rest = re.sub(r"[\d€$£]+", " ", rest)
+    rest = re.sub(r"\b(?:EUR|USD|GBP)\b", " ", rest)
+    if sum(1 for zeichen in rest if zeichen.isalpha()) < 3:
+        return False
+    return True
 
 
 def pdf_text_lesen(pdf_pfad: str) -> str:
@@ -214,6 +261,10 @@ def _anbieter_kandidat(zeilen: list[str]) -> str | None:
             continue
         if _BETRAG_ZEILE_MUSTER.match(zeile):
             continue
+        if _MERCHANT_FELD_MUSTER.match(zeile):
+            continue
+        if not _anbieter_plausibel(zeile):
+            continue
         return zeile
     return None
 
@@ -235,11 +286,23 @@ def felder_aus_text(
     zeilen = [z.strip() for z in text.splitlines() if z.strip()]
     ergebnis: dict[str, ExtrahiertesFeld] = {}
 
+    # Anbieter-Prioritaet: 1. belastbare Organisationszeile, 2. explizites
+    # Haendler-/Anbieter-/Merchant-Feld, 3. bereinigter Organisationsname
+    # aus dem E-Mail-Absender, sonst kein Anbieter. Jede Stufe muss die
+    # Plausibilitaetspruefung bestehen -- es wird nie ein Anbieter erfunden.
     anbieter = _anbieter_kandidat(zeilen)
     anbieter_herkunft = herkunft
     if not anbieter:
-        anbieter = _bereinigter_absender(absender_fallback or "")
-        anbieter_herkunft = "aus E-Mail-Absender"
+        treffer_merchant = _MERCHANT_FELD_MUSTER.search(text)
+        if treffer_merchant:
+            kandidat = treffer_merchant.group(1).strip()
+            if _anbieter_plausibel(kandidat):
+                anbieter = kandidat
+    if not anbieter:
+        absender_name = _bereinigter_absender(absender_fallback or "")
+        if absender_name and _anbieter_plausibel(absender_name):
+            anbieter = absender_name
+            anbieter_herkunft = "aus E-Mail-Absender"
     ergebnis["anbieter"] = ExtrahiertesFeld(
         "anbieter", anbieter, anbieter_herkunft if anbieter else "fehlt"
     )

@@ -467,6 +467,18 @@ def verarbeite_datei(
     dokumentstatus, reviewstatus, review_aufgabe = _status_ableiten(
         ausgang, fehlende_checkliste, radar_eintrag.einschaetzung if radar_eintrag else None
     )
+    # Ein Zahlungsbeleg ohne zugehoerige Rechnung (Solo-Upload: es gibt
+    # keinen Vorgang, der eine Rechnung enthalten koennte) bekommt nie eine
+    # "Fehlende Angaben ergaenzen"-Aufgabe -- der Nutzer soll keine
+    # Rechnungsdaten erfinden, sondern das fehlende Original beschaffen.
+    # Fuer EML-Vorgaenge setzt die Vorgangsregel in verarbeite_eml dieselbe
+    # Aufgabe, sobald die Rechnung im Vorgang fehlt.
+    if (
+        kontext is None
+        and beleg.dokumentart == DOKUMENTART_ZAHLUNGSBELEG
+        and ausgang == AUSGANG_REVIEW
+    ):
+        review_aufgabe = vorgang_modul.AUFGABE_RECHNUNG_ANFORDERN
     beleg.dokumentstatus = dokumentstatus
     beleg.reviewstatus = reviewstatus
     beleg.review_aufgabe = review_aufgabe

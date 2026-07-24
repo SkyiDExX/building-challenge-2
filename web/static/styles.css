@@ -263,6 +263,10 @@ main { max-width: 1120px; margin: 0 auto; padding: 8px 20px 40px; }
   font-weight: 600;
 }
 .btn-pdf:hover { background: rgba(242, 138, 69, 0.20); }
+/* Guard wie beim Overlay: display:inline-block wuerde sonst die
+   UA-Regel [hidden] { display: none } ueberstimmen -- genau das liess den
+   PDF-Button auch bei MAILTEXT-Belegen sichtbar bleiben. */
+.btn-pdf[hidden] { display: none; }
 
 /* Kompakte Duplikat-Zusammenfassung am Listenende */
 .dubletten-kompakt {
@@ -347,9 +351,9 @@ main { max-width: 1120px; margin: 0 auto; padding: 8px 20px 40px; }
   background: var(--glas-karte);
   box-shadow: var(--schatten-karte);
 }
-.radar-zeile1 { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
 .radar-name { font-weight: 600; overflow-wrap: anywhere; }
-.radar-betrag { font-variant-numeric: tabular-nums; }
+.radar-zeile2 { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.radar-betrag { font-variant-numeric: tabular-nums; color: var(--text-leise); font-size: 0.9rem; }
 .radar-begruendung { font-size: 0.88rem; color: var(--text-leise); }
 
 /* ---- Fuß ---- */
@@ -425,6 +429,8 @@ main { max-width: 1120px; margin: 0 auto; padding: 8px 20px 40px; }
   padding: 20px;
   z-index: 50;
 }
+/* Modal als Spalte: Kopf (Titel + Schliessen-X) und primaere Aktion bleiben
+   beim Scrollen sichtbar, nur .detail-inhalt scrollt. */
 .detail {
   background: var(--glas-modal);
   -webkit-backdrop-filter: blur(26px) saturate(150%);
@@ -436,16 +442,37 @@ main { max-width: 1120px; margin: 0 auto; padding: 8px 20px 40px; }
   max-width: 860px;
   width: 100%;
   max-height: 85vh;
-  overflow: auto;
-  padding: 18px 20px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+}
+.detail-inhalt {
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 4px 20px 18px;
+  min-height: 0;
 }
 @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
   .detail { background: var(--glas-fallback-modal); }
 }
-.dialog-klein { max-width: 420px; position: relative; padding-right: 56px; }
+/* Der kleine Reset-Dialog hat keinen scrollenden Inhaltsbereich: er
+   bleibt ein einfacher Block mit eigenem Innenabstand (das Flex-Layout
+   mit padding 0 gilt nur dem grossen Detailmodal). */
+.dialog-klein { max-width: 420px; position: relative; display: block; padding: 18px 56px 18px 20px; }
 .dialog-aktionen { display: flex; gap: 10px; margin-top: 12px; }
-.detail-kopf { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+.detail-kopf {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+  padding: 14px 20px 10px;
+  border-bottom: 1px solid var(--linie);
+}
 .detail-kopf h3 { margin: 0; overflow-wrap: anywhere; }
+.detail-meta { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+.erkannt-zusammenfassung { margin: 8px 0 0; font-size: 0.9rem; color: var(--text-leise); }
 
 /* Statuskarte: Entscheidung und offene Aufgabe zuerst, deutlich hervorgehoben */
 .detail-status {
@@ -471,15 +498,15 @@ main { max-width: 1120px; margin: 0 auto; padding: 8px 20px 40px; }
 }
 .detail-quelle h4:first-child, .detail-felder h4:first-child { margin-top: 0; }
 
-/* Technikteil: vollstaendig erreichbar (Jury-Nachweis), aber standardmaessig
-   eingeklappt hinter "Technische Agentendetails" -- die normale Ansicht
-   bleibt kompakt. */
-.technik-details {
-  margin-top: 18px;
+/* Eingeklappte Ebenen der Detailansicht: "Prüfnachweis" und "Technische
+   Agentendetails" starten geschlossen; beide bleiben fuer Jury und Audit
+   vollstaendig erreichbar, dominieren aber nicht die normale Ansicht. */
+.klapp-bereich {
+  margin-top: 16px;
   padding-top: 10px;
   border-top: 1px solid var(--linie);
 }
-.technik-details > summary {
+.klapp-bereich > summary {
   cursor: pointer;
   font-size: 0.82rem;
   font-weight: 700;
@@ -487,6 +514,7 @@ main { max-width: 1120px; margin: 0 auto; padding: 8px 20px 40px; }
   letter-spacing: 0.07em;
   color: var(--text-leise);
 }
+.klapp-bereich .detail-spalten { margin-top: 12px; }
 .detail-technik {
   margin-top: 8px;
   font-size: 0.92em;
@@ -560,29 +588,29 @@ main { max-width: 1120px; margin: 0 auto; padding: 8px 20px 40px; }
 }
 
 /* ---- Scrollbars (Markenoptik, nie versteckt) ----
-   Detailmodal und lange interne Bereiche: schmale Spur, transparenter
-   Hintergrund, gedaempfter orangefarbener, abgerundeter Griff. Tastatur-,
-   Maus- und Touchscrollen bleiben unveraendert. */
-.detail,
+   Nur der Inhaltsbereich des Modals und lange interne Bereiche scrollen:
+   maximal 6px breit, transparente Spur, orangefarbener Griff mit geringer
+   Deckkraft, erst bei Hover/aktivem Scrollen deutlicher, abgerundet.
+   Tastatur-, Maus- und Touchscrollen bleiben unveraendert. */
+.detail-inhalt,
 .quelle-vorschau {
   scrollbar-width: thin;
-  scrollbar-color: rgba(242, 138, 69, 0.5) transparent;
+  scrollbar-color: rgba(242, 138, 69, 0.35) transparent;
 }
-.detail::-webkit-scrollbar,
-.quelle-vorschau::-webkit-scrollbar { width: 10px; height: 10px; }
-.detail::-webkit-scrollbar-track,
+.detail-inhalt::-webkit-scrollbar,
+.quelle-vorschau::-webkit-scrollbar { width: 6px; height: 6px; }
+.detail-inhalt::-webkit-scrollbar-track,
 .quelle-vorschau::-webkit-scrollbar-track { background: transparent; }
-.detail::-webkit-scrollbar-thumb,
+.detail-inhalt::-webkit-scrollbar-thumb,
 .quelle-vorschau::-webkit-scrollbar-thumb {
-  background: rgba(242, 138, 69, 0.45);
+  background: rgba(242, 138, 69, 0.28);
   border-radius: 999px;
-  border: 2px solid transparent;
-  background-clip: padding-box;
 }
-.detail::-webkit-scrollbar-thumb:hover,
-.quelle-vorschau::-webkit-scrollbar-thumb:hover {
-  background: rgba(242, 138, 69, 0.65);
-  background-clip: padding-box;
+.detail-inhalt::-webkit-scrollbar-thumb:hover,
+.detail-inhalt::-webkit-scrollbar-thumb:active,
+.quelle-vorschau::-webkit-scrollbar-thumb:hover,
+.quelle-vorschau::-webkit-scrollbar-thumb:active {
+  background: rgba(242, 138, 69, 0.55);
 }
 
 /* ---- Fokus und Bewegung ---- */

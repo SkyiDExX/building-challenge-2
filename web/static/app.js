@@ -81,9 +81,12 @@ async function ladeAlles() {
 }
 
 function pdfOriginalLink(b, klassen) {
+  // Die URL kommt ausschliesslich aus der API; der Server hat die
+  // Verfuegbarkeit (echtes PDF, sicher aufloesbar, %PDF-Signatur) bereits
+  // berechnet. Ohne original_pdf_verfuegbar wird nie ein Button gerendert.
   const link = document.createElement("a");
   link.className = klassen;
-  link.href = `/api/belege/${encodeURIComponent(b.id)}/original`;
+  link.href = b.original_pdf_url;
   link.target = "_blank";
   link.rel = "noopener";
   link.textContent = "Original-PDF";
@@ -100,7 +103,9 @@ function belegKarte(b) {
   // und Technikdetails stehen in der Detailansicht.
   const karte = document.createElement("div");
   karte.className = "beleg";
-  const titel = b.felder.anbieter.wert || b.dateiname;
+  // Anbieter nur bei ausreichender Sicherheit; sonst ehrlich "Anbieter
+  // nicht eindeutig" mit dem Dateinamen zur Unterscheidung.
+  const titel = b.felder.anbieter.wert || "Anbieter nicht eindeutig";
   const [label, klasse] = AUSGANG_LABEL[b.ausgang] || [b.ausgang, "badge-quelle"];
 
   const z1 = document.createElement("div");
@@ -114,6 +119,7 @@ function belegKarte(b) {
     metaTeile.push(`${b.felder.betrag.wert} ${b.felder.waehrung.wert || ""}`.trim());
   }
   if (b.felder.datum.wert) metaTeile.push(b.felder.datum.wert);
+  if (!b.felder.anbieter.wert) metaTeile.push(b.dateiname);
   if (metaTeile.length > 0) {
     const meta = document.createElement("span");
     meta.className = "beleg-meta";
@@ -142,7 +148,7 @@ function belegKarte(b) {
   detailsBtn.setAttribute("aria-label", `Details zu ${titel} öffnen (Status: ${label})`);
   detailsBtn.addEventListener("click", () => detailOeffnen(b));
   aktionen.appendChild(detailsBtn);
-  if (b.dateityp === "PDF") {
+  if (b.original_pdf_verfuegbar && b.original_pdf_url) {
     aktionen.appendChild(pdfOriginalLink(b, "btn btn-pdf btn-klein"));
   }
   karte.appendChild(aktionen);
@@ -203,7 +209,11 @@ function renderBelege(belege) {
 
     const li = document.createElement("li");
     if (b.vorgang_id) li.classList.add("vorgang-mitglied");
-    if (b.ausgang === "review" || b.ausgang === "original_anfordern" || b.ausgang === "fehlgeschlagen") {
+    // Offene Faelle stehen vor fertigen Faellen.
+    if (
+      b.ausgang === "review" || b.ausgang === "original_anfordern" ||
+      b.ausgang === "fehlgeschlagen" || b.reviewstatus === "offen"
+    ) {
       li.classList.add("review-zuerst");
     }
     li.appendChild(belegKarte(b));
@@ -250,24 +260,31 @@ function renderRadar(radar) {
   radar.forEach((r) => {
     const li = document.createElement("li");
     li.className = "radar-karte";
-    const z1 = document.createElement("div");
-    z1.className = "radar-zeile1";
-    const name = document.createElement("span");
+    // Titel enthaelt ausschliesslich den Anbieter (oder den ehrlichen
+    // Platzhalter); Betrag, Zeitraum und Status stehen in der zweiten Zeile.
+    const name = document.createElement("div");
     name.className = "radar-name";
-    name.textContent = `${r.anbieter} (${r.zeitraum || "unbekannt"})`;
-    const rechts = document.createElement("span");
-    rechts.className = "radar-betrag";
-    rechts.textContent = r.betrag ? `${r.betrag} ${r.waehrung || ""} ` : "";
+    name.textContent = r.anbieter || "Anbieter nicht eindeutig";
+    li.appendChild(name);
+    const zeile2 = document.createElement("div");
+    zeile2.className = "radar-zeile2";
+    const teile = [];
+    if (r.betrag) teile.push(`${r.betrag} ${r.waehrung || ""}`.trim());
+    if (r.zeitraum && r.zeitraum !== "unbekannt") teile.push(r.zeitraum);
+    if (teile.length > 0) {
+      const meta = document.createElement("span");
+      meta.className = "radar-betrag";
+      meta.textContent = teile.join(" · ");
+      zeile2.appendChild(meta);
+    }
     // r.einschaetzung ist null, wenn der Abovergleich fuer diesen Beleg
-    // bewusst deaktiviert war (z.B. juengster Beleg des Anbieters ist ein
-    // Zahlungsbeleg, kein Rechnungsvergleich). Dann keinen Badge erfinden.
+    // bewusst deaktiviert war. Dann keinen Badge erfinden.
     const eintrag = RADAR_LABEL[r.einschaetzung];
     if (eintrag) {
       const [label, klasse] = eintrag;
-      rechts.appendChild(badge(label, klasse));
+      zeile2.appendChild(badge(label, klasse));
     }
-    z1.append(name, rechts);
-    li.appendChild(z1);
+    li.appendChild(zeile2);
     if (r.begruendung) {
       const beg = document.createElement("div");
       beg.className = "radar-begruendung";
@@ -295,9 +312,28 @@ function renderAudit(audit) {
 /* ---------- Detailansicht ---------- */
 
 function detailOeffnen(b) {
-  const anbieter = b.felder.anbieter.wert || b.dateiname;
-  const [label] = AUSGANG_LABEL[b.ausgang] || [b.ausgang];
-  $("detail-titel").textContent = `${anbieter} — ${label}`;
+  const anbieter = b.felder.anbieter.wert || "Anbieter nicht eindeutig";
+  const [label, klasse] = AUSGANG_LABEL[b.ausgang] || [b.ausgang, "badge-quelle"];
+  $("detail-titel").textContent = anbieter;
+
+  // Sofort sichtbare Meta-Zeile: Dokumentart, Status, Betrag und Datum.
+  const metaZeile = $("detail-meta");
+  metaZeile.textContent = "";
+  if (b.dokumentart && DOKUMENTART_LABEL[b.dokumentart]) {
+    metaZeile.appendChild(badge(DOKUMENTART_LABEL[b.dokumentart], "badge-quelle"));
+  }
+  metaZeile.appendChild(badge(label, klasse));
+  const metaTeile = [];
+  if (b.felder.betrag.wert) {
+    metaTeile.push(`${b.felder.betrag.wert} ${b.felder.waehrung.wert || ""}`.trim());
+  }
+  if (b.felder.datum.wert) metaTeile.push(b.felder.datum.wert);
+  if (metaTeile.length > 0) {
+    const metaText = document.createElement("span");
+    metaText.className = "beleg-meta";
+    metaText.textContent = metaTeile.join(" · ");
+    metaZeile.appendChild(metaText);
+  }
 
   const q = $("detail-quelle-inhalt");
   q.textContent = "";
@@ -353,6 +389,10 @@ function detailOeffnen(b) {
     cl.appendChild(li);
   }
 
+  const feldwerte = Object.values(b.felder);
+  const erkannt = feldwerte.filter((f) => f.wert !== null).length;
+  $("detail-erkannt").textContent = `${erkannt} von ${feldwerte.length} Angaben erkannt.`;
+
   $("detail-entscheidung").textContent = b.begruendung;
 
   const reviewHinweis = $("detail-review-hinweis");
@@ -363,9 +403,12 @@ function detailOeffnen(b) {
     reviewHinweis.hidden = true;
   }
 
+  // PDF-Button nur, wenn der Server die Verfuegbarkeit bestaetigt hat
+  // (echtes PDF, sicher aufloesbar, %PDF-Signatur). MAILTEXT, Bilder und
+  // unbekannte Typen bekommen nie einen (auch keinen deaktivierten) Button.
   const pdfBtn = $("detail-pdf-btn");
-  if (b.dateityp === "PDF") {
-    pdfBtn.href = `/api/belege/${encodeURIComponent(b.id)}/original`;
+  if (b.original_pdf_verfuegbar && b.original_pdf_url) {
+    pdfBtn.href = b.original_pdf_url;
     pdfBtn.hidden = false;
   } else {
     pdfBtn.removeAttribute("href");
@@ -419,10 +462,12 @@ function detailOeffnen(b) {
     schritteListe.appendChild(li);
   });
 
-  // Technikbereich startet bei jedem Oeffnen eingeklappt.
+  // Pruefnachweis und Technikbereich starten bei jedem Oeffnen eingeklappt.
+  $("pruefnachweis-details").open = false;
   $("technik-details").open = false;
 
   $("detail-overlay").hidden = false;
+  document.querySelector(".detail-inhalt").scrollTop = 0;
   $("detail-schliessen").focus();
 }
 

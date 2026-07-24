@@ -87,37 +87,44 @@
       <h3 id="detail-titel"></h3>
       <button id="detail-schliessen" class="schliessen-btn" type="button" aria-label="Schließen" title="Schließen"><img src="/assets/brand/optitax-close-x-32.png" width="28" height="28" alt=""></button>
     </div>
-    <div class="detail-status">
-      <h4>Ergebnis</h4>
-      <p id="detail-entscheidung" class="entscheidung"></p>
-      <p id="detail-review-hinweis" class="review-hinweis" hidden></p>
-      <div class="detail-aktionen">
-        <a id="detail-pdf-btn" class="btn btn-pdf" target="_blank" rel="noopener" hidden>Original-PDF öffnen</a>
+    <div class="detail-inhalt">
+      <div id="detail-meta" class="detail-meta"></div>
+      <div class="detail-status">
+        <h4>Ergebnis</h4>
+        <p id="detail-entscheidung" class="entscheidung"></p>
+        <p id="detail-review-hinweis" class="review-hinweis" hidden></p>
+        <div class="detail-aktionen">
+          <a id="detail-pdf-btn" class="btn btn-pdf" target="_blank" rel="noopener" hidden>Original-PDF öffnen</a>
+        </div>
       </div>
+      <details id="pruefnachweis-details" class="klapp-bereich">
+        <summary>Prüfnachweis</summary>
+        <p id="detail-erkannt" class="erkannt-zusammenfassung"></p>
+        <div class="detail-spalten">
+          <div class="detail-quelle">
+            <h4>Quelle</h4>
+            <div id="detail-quelle-inhalt"></div>
+          </div>
+          <div class="detail-felder">
+            <h4>Erkannte Angaben</h4>
+            <dl id="detail-felder-liste"></dl>
+            <h4>Checkliste</h4>
+            <ul id="detail-checkliste"></ul>
+          </div>
+        </div>
+      </details>
+      <details id="technik-details" class="technik-details klapp-bereich">
+        <summary>Technische Agentendetails</summary>
+        <div class="detail-technik">
+          <h4>Plan des Agenten</h4>
+          <div id="detail-plan"></div>
+          <details class="schritte-details">
+            <summary>Agentenschritte</summary>
+            <ul id="detail-schritte" class="audit-liste"></ul>
+          </details>
+        </div>
+      </details>
     </div>
-    <div class="detail-spalten">
-      <div class="detail-quelle">
-        <h4>Quelle</h4>
-        <div id="detail-quelle-inhalt"></div>
-      </div>
-      <div class="detail-felder">
-        <h4>Erkannte Angaben</h4>
-        <dl id="detail-felder-liste"></dl>
-        <h4>Checkliste</h4>
-        <ul id="detail-checkliste"></ul>
-      </div>
-    </div>
-    <details id="technik-details" class="technik-details">
-      <summary>Technische Agentendetails</summary>
-      <div class="detail-technik">
-        <h4>Plan des Agenten</h4>
-        <div id="detail-plan"></div>
-        <details class="schritte-details">
-          <summary>Agentenschritte</summary>
-          <ul id="detail-schritte" class="audit-liste"></ul>
-        </details>
-      </div>
-    </details>
   </div>
 </div>
 

@@ -2094,14 +2094,14 @@ class SteuerzeichenApiTest(HttpTestCase):
         daten = json.loads(body)
         beleg = daten["belege"][0]
         self.assertEqual(beleg["felder"]["referenz"]["wert"], "RE-471")
-        self.assertEqual(beleg["felder"]["zeitraum"]["wert"], "01.07.2026-31.07.2026")
+        self.assertEqual(beleg["felder"]["zeitraum"]["wert"], "01.07.2026 bis 31.07.2026")
 
         status, csv_body = self._senden("GET", "/api/export.csv", host=f"127.0.0.1:{self.port}")
         self.assertEqual(status, 200)
         ohne_zeilenenden = csv_body.replace(b"\r", b"").replace(b"\n", b"")
         self._c0_pruefen(ohne_zeilenenden, "/api/export.csv")
         text = csv_body.decode("utf-8")
-        self.assertIn("01.07.2026-31.07.2026", text, "Zeitraum braucht einen sichtbaren Trenner")
+        self.assertIn("2026-07-01 bis 2026-07-31", text, "Zeitraum braucht einen sichtbaren Trenner")
         self.assertIn("RE-471", text)
 
     def test_csv_formelschutz_bleibt_nach_normalisierung_erhalten(self):
@@ -2347,8 +2347,9 @@ class ReviewUiTest(unittest.TestCase):
         self.assertIn('$("technik-details").open = false;', self.js)
 
     def test_pdf_zugang_nur_fuer_pdf_belege(self):
-        self.assertIn('b.dateityp === "PDF"', self.js)
-        self.assertIn("/api/belege/", self.js)
+        self.assertIn("b.original_pdf_verfuegbar && b.original_pdf_url", self.js)
+        self.assertNotIn('b.dateityp === "PDF"', self.js,
+                         "Die Oberfläche entscheidet nie selbst über PDF-Verfügbarkeit")
         self.assertIn('rel = "noopener"', self.js)
 
     def test_karten_zeigen_keinen_entscheidungstext_mehr(self):
@@ -2368,6 +2369,307 @@ class ReviewUiTest(unittest.TestCase):
         self.assertNotIn("scrollbar-width: none", self.css)
         for block in re.findall(r"::-webkit-scrollbar[^{]*\{([^}]*)\}", self.css):
             self.assertNotIn("display: none", block, "Scrollbars dürfen nicht versteckt werden")
+
+
+class OriginalPdfModellTest(HttpTestCase):
+    """Serverseitig berechnete PDF-Verfuegbarkeit: die Oberflaeche rendert
+    den Button nur, wenn die API original_pdf_verfuegbar bestaetigt und
+    eine relative URL mitliefert."""
+
+    def _belege(self) -> list[dict]:
+        status, body = self._senden("GET", "/api/ergebnis", host=f"127.0.0.1:{self.port}")
+        self.assertEqual(status, 200)
+        return json.loads(body)["belege"]
+
+    def test_pdf_beleg_ist_verfuegbar_und_url_funktioniert(self):
+        self._upload_ok([("cloudbasis_juli.pdf", _lesen("cloudbasis_juli.pdf"))])
+        beleg = self._belege()[0]
+        self.assertTrue(beleg["original_pdf_verfuegbar"])
+        url = beleg["original_pdf_url"]
+        self.assertTrue(url.startswith("/api/belege/"), "URL muss relativ sein")
+        self.assertNotIn(":\\", url)
+        self.assertNotIn("runtime", url)
+        status, daten = self._senden("GET", url, host=f"127.0.0.1:{self.port}")
+        self.assertEqual(status, 200)
+        self.assertTrue(daten.startswith(b"%PDF"))
+
+    def test_mailtext_beleg_hat_keine_pdf_verfuegbarkeit(self):
+        self._upload_ok(
+            [("domainly_nur_html_rechnung.eml", _lesen("domainly_nur_html_rechnung.eml"))]
+        )
+        mailtexte = [b for b in self._belege() if b["dateityp"] == "MAILTEXT"]
+        self.assertGreaterEqual(len(mailtexte), 1, "Fixture muss einen Mailtext-Beleg erzeugen")
+        for beleg in mailtexte:
+            self.assertFalse(beleg["original_pdf_verfuegbar"])
+            self.assertNotIn("original_pdf_url", beleg, "Ohne Verfügbarkeit gibt es keine URL")
+
+    def test_pdf_kind_einer_eml_ist_verfuegbar(self):
+        self._upload_ok(
+            [("cloudbasis_rechnung_und_zahlung.eml", _lesen("cloudbasis_rechnung_und_zahlung.eml"))]
+        )
+        pdf_kinder = [b for b in self._belege() if b["dateityp"] == "PDF"]
+        self.assertGreaterEqual(len(pdf_kinder), 1)
+        for beleg in pdf_kinder:
+            self.assertTrue(beleg["original_pdf_verfuegbar"], beleg["dateiname"])
+            status, daten = self._senden(
+                "GET", beleg["original_pdf_url"], host=f"127.0.0.1:{self.port}"
+            )
+            self.assertEqual(status, 200)
+            self.assertTrue(daten.startswith(b"%PDF"))
+
+    def test_bild_beleg_hat_keine_pdf_verfuegbarkeit(self):
+        self._upload_ok([("mobiltel_screenshot.png", _lesen("mobiltel_screenshot.png"))])
+        beleg = self._belege()[0]
+        self.assertFalse(beleg["original_pdf_verfuegbar"])
+        self.assertNotIn("original_pdf_url", beleg)
+
+
+class AnbieterPlausibilitaetTest(unittest.TestCase):
+    """Explizite Plausibilitaetspruefung: satzartige Texte, Faelligkeits-
+    zeilen und Datums-/Betragsreste sind nie ein Anbieter; kurze
+    Organisationsnamen bleiben zulaessig. Der Ablehnungsfall 'Eigenname
+    plus ganzer Satz' wird mit einem generischen Namen getestet."""
+
+    def test_date_due_zeile_wird_abgelehnt(self):
+        felder = extrahieren.felder_aus_text("Date due July 15, 2026\nBetrag: 5,00 EUR")
+        self.assertIsNone(felder["anbieter"].wert)
+
+    def test_ganzer_satz_mit_eigennamen_wird_abgelehnt(self):
+        felder = extrahieren.felder_aus_text(
+            "Alex Beispiel, Sie haben eine Zahlung gesendet.\nBetrag: 5,00 EUR"
+        )
+        self.assertIsNone(felder["anbieter"].wert)
+
+    def test_satz_ohne_eigennamen_wird_abgelehnt(self):
+        felder = extrahieren.felder_aus_text("Sie haben eine Zahlung gesendet.\nBetrag: 5,00 EUR")
+        self.assertIsNone(felder["anbieter"].wert)
+
+    def test_kurze_organisationsnamen_werden_akzeptiert(self):
+        for name in ("Netlify, Inc.", "Anthropic, PBC"):
+            felder = extrahieren.felder_aus_text(f"{name}\nInvoice number: INV-1")
+            self.assertEqual(felder["anbieter"].wert, name)
+
+    def test_merchant_feld_ist_zweite_prioritaet(self):
+        felder = extrahieren.felder_aus_text(
+            "Date due July 15, 2026\nMerchant: Netlify, Inc.\nBetrag: 5,00 EUR"
+        )
+        self.assertEqual(felder["anbieter"].wert, "Netlify, Inc.")
+        self.assertNotEqual(felder["anbieter"].herkunft, "fehlt")
+
+    def test_absender_fallback_nach_merchant(self):
+        felder = extrahieren.felder_aus_text(
+            "Date due July 15, 2026\nBetrag: 5,00 EUR",
+            absender_fallback="Beispiel Software GmbH <billing@beispiel.invalid>",
+        )
+        self.assertEqual(felder["anbieter"].wert, "Beispiel Software GmbH")
+        self.assertEqual(felder["anbieter"].herkunft, "aus E-Mail-Absender")
+
+
+class AnbieterUnsicherReviewTest(IsolierteDatenbankTestCase):
+    """Ohne belastbaren Anbieter landet der Beleg ehrlich in Review und die
+    Aufgabe nennt die Anbieterpruefung."""
+
+    def test_unsicherer_anbieter_landet_in_review(self):
+        inhalt = _synthetische_rechnung(
+            [
+                "Date due July 15, 2026",
+                "Rechnung Nr. RE-90",
+                "Datum: 01.08.2026",
+                "Leistungszeitraum: monatlich",
+                "Tarif: Standard",
+                "Betrag: 5,00 EUR",
+                "Waehrung: EUR",
+            ]
+        )
+        beleg = agent.verarbeite_datei(
+            self.conn, speicher.neuer_lauf(self.conn), "unsicher.pdf", inhalt
+        )
+        self.assertIsNone(beleg.feldwert("anbieter"))
+        self.assertEqual(beleg.ausgang, AUSGANG_REVIEW)
+        self.assertIn("Anbieter", beleg.review_aufgabe)
+
+
+class ZahlungsnachweisAufgabeTest(IsolierteDatenbankTestCase):
+    """Zahlungsnachweise bekommen nie eine 'Rechnungsdaten ergaenzen'-
+    Aufgabe: der Nutzer soll das fehlende Original beschaffen, keine
+    Angaben erfinden."""
+
+    def test_solo_zahlungsbeleg_verlangt_original_statt_ergaenzung(self):
+        inhalt = _synthetische_rechnung(
+            [
+                "Anbieter GmbH",
+                "Zahlungsbeleg",
+                "Zahlung erhalten",
+                "Datum: 01.08.2026",
+                "Betrag: 23,00 EUR",
+                "Waehrung: EUR",
+            ]
+        )
+        beleg = agent.verarbeite_datei(
+            self.conn, speicher.neuer_lauf(self.conn), "zahlung.pdf", inhalt
+        )
+        self.assertEqual(beleg.dokumentart, "zahlungsbeleg")
+        self.assertEqual(beleg.ausgang, AUSGANG_REVIEW)
+        self.assertEqual(beleg.review_aufgabe, "Rechnung oder Originalbeleg anfordern")
+        self.assertNotIn("ergänzen", beleg.review_aufgabe)
+
+    def test_rechnung_mit_luecken_behaelt_konkrete_ergaenzungsaufgabe(self):
+        inhalt = _synthetische_rechnung(
+            [
+                "Anbieter GmbH",
+                "Rechnung",
+                "Datum: 01.08.2026",
+                "Betrag: 23,00 EUR",
+                "Waehrung: EUR",
+            ]
+        )
+        beleg = agent.verarbeite_datei(
+            self.conn, speicher.neuer_lauf(self.conn), "rechnung.pdf", inhalt
+        )
+        self.assertEqual(beleg.dokumentart, "rechnung")
+        self.assertEqual(beleg.ausgang, AUSGANG_REVIEW)
+        self.assertTrue(beleg.review_aufgabe.startswith("Fehlende Angaben ergänzen"))
+
+
+class DatumformatTest(unittest.TestCase):
+    """UI immer TT.MM.JJJJ bzw. 'TT.MM.JJJJ bis TT.MM.JJJJ', CSV immer
+    YYYY-MM-DD; nicht sicher Erkennbares bleibt unveraendert."""
+
+    def test_einzeldatum_ui_und_csv(self):
+        from belegwaechter import datumformat
+
+        self.assertEqual(datumformat.datum_ui("July 15, 2026"), "15.07.2026")
+        self.assertEqual(datumformat.datum_ui("5. August 2026"), "05.08.2026")
+        self.assertEqual(datumformat.datum_ui("01.08.2026"), "01.08.2026")
+        self.assertEqual(datumformat.datum_csv("July 15, 2026"), "2026-07-15")
+        self.assertEqual(datumformat.datum_csv("01.08.2026"), "2026-08-01")
+
+    def test_zeitraum_ui_und_csv(self):
+        from belegwaechter import datumformat
+
+        self.assertEqual(
+            datumformat.zeitraum_ui("july 15, 2026 - august 15, 2026"),
+            "15.07.2026 bis 15.08.2026",
+        )
+        self.assertEqual(
+            datumformat.zeitraum_ui("01.07.2026-31.07.2026"),
+            "01.07.2026 bis 31.07.2026",
+        )
+        self.assertEqual(
+            datumformat.zeitraum_csv("01.07.2026-31.07.2026"),
+            "2026-07-01 bis 2026-07-31",
+        )
+
+    def test_unsichere_werte_bleiben_unveraendert(self):
+        from belegwaechter import datumformat
+
+        self.assertEqual(datumformat.zeitraum_ui("monatlich"), "monatlich")
+        self.assertEqual(datumformat.datum_ui("32.13.2026"), "32.13.2026")
+        self.assertIsNone(datumformat.datum_csv(None))
+
+
+class EnglischeRechnungTest(HttpTestCase):
+    """Englische Vorlage Ende-zu-Ende: einheitliche UI- und CSV-Datums-
+    darstellung, Radar-Titel ohne Datum als Anbieter."""
+
+    def _hochladen(self) -> None:
+        inhalt = _synthetische_rechnung(
+            [
+                "Anthropic, PBC",
+                "Invoice number: INV-9",
+                "Date of issue: July 15, 2026",
+                "July 15, 2026 - August 15, 2026",
+                "Tarif: Pro",
+                "Amount due: 100.67 USD",
+            ]
+        )
+        status, _ = self._upload_ok([("anthropic_invoice.pdf", inhalt)])
+        self.assertEqual(status, 200)
+
+    def test_ui_und_csv_datumsformate_einheitlich(self):
+        self._hochladen()
+        status, body = self._senden("GET", "/api/ergebnis", host=f"127.0.0.1:{self.port}")
+        beleg = json.loads(body)["belege"][0]
+        self.assertEqual(beleg["felder"]["anbieter"]["wert"], "Anthropic, PBC")
+        self.assertEqual(beleg["felder"]["datum"]["wert"], "15.07.2026")
+        self.assertEqual(beleg["felder"]["zeitraum"]["wert"], "15.07.2026 bis 15.08.2026")
+
+        status, radar_body = self._senden("GET", "/api/radar", host=f"127.0.0.1:{self.port}")
+        radar = json.loads(radar_body)["radar"]
+        self.assertEqual(len(radar), 1)
+        self.assertEqual(radar[0]["anbieter"], "Anthropic, PBC")
+        self.assertEqual(radar[0]["zeitraum"], "15.07.2026 bis 15.08.2026")
+
+        status, csv_body = self._senden("GET", "/api/export.csv", host=f"127.0.0.1:{self.port}")
+        text = csv_body.decode("utf-8-sig")
+        self.assertIn("Anthropic, PBC", text)
+        self.assertIn("2026-07-15", text)
+        self.assertIn("2026-07-15 bis 2026-08-15", text)
+        self.assertIn("100.67", text)
+        self.assertIn("USD", text)
+        self.assertNotIn("July", text, "CSV darf keine englischen Monatsnamen enthalten")
+        self.assertNotIn("july", text)
+
+
+class DreiEbenenUiTest(unittest.TestCase):
+    """Dreistufige Detailansicht und beruhigte Hauptansicht: Pruefnachweis
+    und Technikbereich starten geschlossen, der Modalkopf scrollt nicht mit,
+    Audit startet geschlossen, Scrollbars bleiben schmal und sichtbar."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.html = (REPO_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
+        cls.js = (REPO_ROOT / "web" / "static" / "app.js").read_text(encoding="utf-8")
+        cls.css = (REPO_ROOT / "web" / "static" / "styles.css").read_text(encoding="utf-8")
+
+    def test_pruefnachweis_startet_geschlossen(self):
+        treffer = re.search(r'<details id="pruefnachweis-details"[^>]*>', self.html)
+        self.assertIsNotNone(treffer)
+        self.assertNotIn(" open", treffer.group(0))
+        self.assertIn("<summary>Prüfnachweis</summary>", self.html)
+        self.assertIn('$("pruefnachweis-details").open = false;', self.js)
+        self.assertIn("von", self.js)
+        self.assertIn("Angaben erkannt", self.js)
+
+    def test_technik_details_starten_geschlossen(self):
+        treffer = re.search(r'<details id="technik-details"[^>]*>', self.html)
+        self.assertIsNotNone(treffer)
+        self.assertNotIn(" open", treffer.group(0))
+        self.assertIn('$("technik-details").open = false;', self.js)
+
+    def test_modalkopf_scrollt_nicht_mit(self):
+        detail_block = re.search(r"\.detail \{[^}]*\}", self.css)
+        self.assertIsNotNone(detail_block)
+        self.assertIn("overflow: hidden", detail_block.group(0))
+        self.assertIn("flex-direction: column", detail_block.group(0))
+        kopf_block = re.search(r"\.detail-kopf \{[^}]*\}", self.css)
+        self.assertIn("flex-shrink: 0", kopf_block.group(0))
+        inhalt_block = re.search(r"\.detail-inhalt \{[^}]*\}", self.css)
+        self.assertIn("overflow-y: auto", inhalt_block.group(0))
+
+    def test_pdf_button_hidden_guard_vorhanden(self):
+        self.assertIn(".btn-pdf[hidden] { display: none; }", self.css)
+
+    def test_audit_startet_geschlossen_und_wird_nie_automatisch_geoeffnet(self):
+        treffer = re.search(r'<details id="audit-details"[^>]*>', self.html)
+        self.assertIsNotNone(treffer)
+        self.assertNotIn(" open", treffer.group(0))
+        self.assertNotIn('$("audit-details").open', self.js)
+
+    def test_scrollbar_maximal_6px_und_sichtbar(self):
+        self.assertIn("width: 6px", self.css)
+        self.assertNotIn("width: 10px; height: 10px;", self.css)
+        self.assertIn("scrollbar-width: thin", self.css)
+        for block in re.findall(r"::-webkit-scrollbar[^{]*\{([^}]*)\}", self.css):
+            self.assertNotIn("display: none", block)
+
+    def test_radar_titel_nutzt_nur_anbieter_oder_platzhalter(self):
+        self.assertIn('r.anbieter || "Anbieter nicht eindeutig"', self.js)
+        self.assertNotIn("${r.anbieter} (", self.js, "Kein Zeitraum mehr im Radar-Titel")
+
+    def test_offene_faelle_stehen_vor_fertigen(self):
+        self.assertIn('b.reviewstatus === "offen"', self.js)
+        self.assertIn("review-zuerst", self.css)
 
 
 if __name__ == "__main__":

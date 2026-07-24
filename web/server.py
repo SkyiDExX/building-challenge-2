@@ -23,7 +23,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
-from belegwaechter import agent, dateinamen, speicher, steuerzeichen  # noqa: E402
+from belegwaechter import agent, dateinamen, datumformat, speicher, steuerzeichen  # noqa: E402
 from belegwaechter.fehlertexte import bereinigen  # noqa: E402
 
 HOST = "127.0.0.1"
@@ -98,13 +98,41 @@ def _api_text(wert):
     return steuerzeichen.feldwert_bereinigen(wert) or ""
 
 
+def _original_pdf_verfuegbar(row: dict) -> bool:
+    """Serverseitig berechnete Wahrheit fuer die Oberflaeche: ein
+    Original-PDF gilt nur als verfuegbar, wenn der Beleg ein PDF ist, ein
+    gueltiger storage_key existiert, der Pfad sicher aufloesbar ist, die
+    Datei existiert und die ersten Bytes erneut %PDF bestaetigen. Ein
+    MAILTEXT-Beleg oder ein Bild bekommt nie eine PDF-URL."""
+    if row["dateityp"] != "PDF" or not row["storage_key"]:
+        return False
+    try:
+        pfad = speicher.pfad_aus_key(row["storage_key"])
+        with open(pfad, "rb") as datei:
+            return datei.read(5) == b"%PDF-"
+    except (dateinamen.UnsichererPfadFehler, OSError):
+        return False
+
+
 def _beleg_zu_json(row: dict, plaene: list[dict]) -> dict:
     felder = json.loads(row["felder_json"])
     for feld in felder.values():
         if feld.get("wert") is not None:
             feld["wert"] = steuerzeichen.feldwert_bereinigen(feld["wert"])
+    # Sichtbare Darstellung normalisieren, interne Werte bleiben gespeichert:
+    # einzelne Daten als TT.MM.JJJJ, Zeitraeume als "TT.MM.JJJJ bis TT.MM.JJJJ".
+    if felder.get("datum", {}).get("wert"):
+        felder["datum"]["wert"] = datumformat.datum_ui(felder["datum"]["wert"])
+    if felder.get("zeitraum", {}).get("wert"):
+        felder["zeitraum"]["wert"] = datumformat.zeitraum_ui(felder["zeitraum"]["wert"])
     checkliste = json.loads(row["checkliste_json"])
+    pdf_verfuegbar = _original_pdf_verfuegbar(row)
+    ergebnis_zusatz = (
+        {"original_pdf_url": f"/api/belege/{row['id']}/original"} if pdf_verfuegbar else {}
+    )
     return {
+        **ergebnis_zusatz,
+        "original_pdf_verfuegbar": pdf_verfuegbar,
         "id": row["id"],
         "lauf_id": row["lauf_id"],
         "dateiname": row["dateiname"],
@@ -352,7 +380,7 @@ class BelegwaechterHandler(BaseHTTPRequestHandler):
                     "anbieter": _api_text(r["anbieter"]),
                     "einschaetzung": r["radar_einschaetzung"],
                     "begruendung": _api_text(r["radar_begruendung"]),
-                    "zeitraum": _api_text(r["zeitraum"]),
+                    "zeitraum": datumformat.zeitraum_ui(_api_text(r["zeitraum"])),
                     "betrag": _api_text(r["betrag"]),
                     "waehrung": _api_text(r["waehrung"]),
                     "reviewstatus": r["reviewstatus"],
@@ -392,10 +420,10 @@ class BelegwaechterHandler(BaseHTTPRequestHandler):
                 schreiber.writerow(
                     [
                         _csv_text(b["anbieter"]),
-                        _csv_text(b["datum"]),
+                        _csv_text(datumformat.datum_csv(b["datum"])),
                         b["betrag_dezimal"] or "",
                         _csv_text(b["waehrung"]),
-                        _csv_text(b["zeitraum"]),
+                        _csv_text(datumformat.zeitraum_csv(b["zeitraum"])),
                         _csv_text(b["referenz"]),
                         _csv_text(_QUELLENSTATUS_ANZEIGE.get(b["quellenstatus"], b["quellenstatus"])),
                         _csv_text(b["dateiname"]),

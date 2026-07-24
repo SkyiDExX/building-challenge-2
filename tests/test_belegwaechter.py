@@ -3227,11 +3227,17 @@ class KorrekturUiTest(unittest.TestCase):
         self.assertIn("kritischen Angaben vollständig", self.js)
         self.assertIn("Im Original nicht vorhanden:", self.js)
 
-    def test_eml_download_button_sicher(self):
-        treffer = re.search(r'<a id="detail-eml-btn"[^>]*>', self.html)
+    def test_eml_ansicht_und_download_sicher(self):
+        # Primaere Aktion: sichere Ansicht (Button), sekundaer: Download des
+        # unveraenderten Originals im E-Mail-Modal.
+        treffer = re.search(r'<button id="detail-eml-btn"[^>]*>', self.html)
         self.assertIsNotNone(treffer)
-        self.assertIn("download", treffer.group(0))
         self.assertIn("hidden", treffer.group(0))
+        self.assertIn("Original-E-Mail ansehen", self.html)
+        download = re.search(r'<a id="email-download"[^>]*>', self.html)
+        self.assertIsNotNone(download)
+        self.assertIn("download", download.group(0))
+        self.assertIn("Originaldatei herunterladen", self.html)
         self.assertIn("b.original_eml_verfuegbar && b.original_eml_url", self.js)
 
     def test_korrektur_button_nur_bei_offenen_faellen(self):
@@ -3520,6 +3526,138 @@ class ProduktVokabularUiTest(unittest.TestCase):
         self.assertIn("korrektur-erkannt", self.css)
         self.assertIn('["produkt", "Produkt"]', self.js)
         self.assertIn('["anbieter", "Rechnungsaussteller"]', self.js)
+
+
+class EmailAnsichtTest(HttpTestCase):
+    """Sichere E-Mail-Ansicht: reiner Text als JSON, Anhangszuordnung,
+    Sicherheitsheader, wertfreie 404, keine Pfade und kein HTML."""
+
+    def _ansicht(self, vorgang_id: str) -> tuple[int, bytes, dict]:
+        conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=10)
+        conn.request("GET", f"/api/vorgaenge/{vorgang_id}/ansicht")
+        resp = conn.getresponse()
+        daten = resp.read()
+        headers = dict(resp.getheaders())
+        conn.close()
+        return resp.status, daten, headers
+
+    def test_ansicht_liefert_sicheren_text_und_anhaenge(self):
+        self._upload_ok(
+            [("cloudbasis_rechnung_und_zahlung.eml", _lesen("cloudbasis_rechnung_und_zahlung.eml"))]
+        )
+        status, body = self._senden("GET", "/api/ergebnis", host=f"127.0.0.1:{self.port}")
+        vorgang_id = json.loads(body)["vorgaenge"][0]["id"]
+        status, daten, headers = self._ansicht(vorgang_id)
+        self.assertEqual(status, 200)
+        self.assertEqual(headers.get("X-Content-Type-Options"), "nosniff")
+        self.assertEqual(headers.get("Cache-Control"), "no-store")
+        ansicht = json.loads(daten)
+        self.assertTrue(ansicht["betreff"])
+        self.assertTrue(ansicht["absender"])
+        self.assertNotIn("<html", (ansicht["text"] or "").lower(), "Nie das Original-HTML einbetten")
+        self.assertNotIn("<script", (ansicht["text"] or "").lower())
+        self.assertGreaterEqual(len(ansicht["anhaenge"]), 1)
+        pdf_anhaenge = [a for a in ansicht["anhaenge"] if "original_pdf_url" in a]
+        self.assertGreaterEqual(len(pdf_anhaenge), 1, "PDF-Anhänge müssen direkt zu öffnen sein")
+        for anhang in ansicht["anhaenge"]:
+            self.assertIn("beleg_id", anhang, "Anhänge werden vorhandenen Belegen zugeordnet")
+        rohtext = daten.decode("utf-8")
+        self.assertNotRegex(rohtext, r"[A-Za-z]:[\\\\/]")
+        self.assertNotIn("runtime", rohtext)
+        self.assertNotIn("storage_key", rohtext)
+
+    def test_unbekannter_vorgang_liefert_wertfreie_404(self):
+        status, daten, _ = self._ansicht("00000000-0000-0000-0000-000000000000")
+        self.assertEqual(status, 404)
+        self.assertEqual(json.loads(daten), {"fehler": "nicht gefunden"})
+
+
+class PdfNamenTest(HttpTestCase):
+    """Aussagekraeftige PDF-Namen: Slug aus Produkt, Dokumentart, Monat und
+    Betrag; ausschliesslich die Beleg-ID bestimmt die Datei."""
+
+    def test_pdf_url_und_dateiname_sind_beschreibend(self):
+        inhalt = _synthetische_rechnung(
+            [
+                "Beispielhost, Inc.",
+                "Rechnung Nr. RE-10",
+                "Datum: 15.07.2026",
+                "Leistungszeitraum: 15.07.2026 - 14.08.2026",
+                "Tarif: Cloud M",
+                "Betrag: 100,67 EUR",
+                "Waehrung: EUR",
+            ]
+        )
+        self._upload_ok([("rechnung.pdf", inhalt)])
+        status, body = self._senden("GET", "/api/ergebnis", host=f"127.0.0.1:{self.port}")
+        beleg = json.loads(body)["belege"][0]
+        url = beleg["original_pdf_url"]
+        self.assertTrue(url.endswith(".pdf"))
+        self.assertIn("Rechnung", url)
+        self.assertIn("2026-07", url)
+        self.assertIn("100-67-EUR", url)
+        self.assertNotIn("RE-10", url, "Keine Referenznummern im sichtbaren Dateinamen")
+
+        status, daten = self._senden("GET", url, host=f"127.0.0.1:{self.port}")
+        self.assertEqual(status, 200)
+        self.assertTrue(daten.startswith(b"%PDF"))
+
+        conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=10)
+        conn.request("GET", url)
+        resp = conn.getresponse()
+        resp.read()
+        disposition = resp.getheader("Content-Disposition", "")
+        conn.close()
+        self.assertTrue(disposition.startswith("inline"))
+        self.assertIn(".pdf", disposition)
+        self.assertNotIn("RE-10", disposition)
+
+    def test_slug_wird_nie_als_pfad_verwendet(self):
+        inhalt = _synthetische_rechnung(
+            [
+                "Beispielhost, Inc.", "Rechnung Nr. RE-11", "Datum: 15.07.2026",
+                "Betrag: 9,00 EUR", "Waehrung: EUR",
+            ]
+        )
+        self._upload_ok([("rechnung.pdf", inhalt)])
+        status, body = self._senden("GET", "/api/ergebnis", host=f"127.0.0.1:{self.port}")
+        beleg_id = json.loads(body)["belege"][0]["id"]
+        # Beliebiger gueltiger Slug liefert dieselbe Datei; Traversal-artige
+        # Slugs scheitern bereits am Routen-Muster.
+        status, daten = self._senden(
+            "GET", f"/api/belege/{beleg_id}/original/beliebiger-name.pdf",
+            host=f"127.0.0.1:{self.port}",
+        )
+        self.assertEqual(status, 200)
+        self.assertTrue(daten.startswith(b"%PDF"))
+        for kaputt in ("/api/belege/" + beleg_id + "/original/../server.py",
+                       "/api/belege/" + beleg_id + "/original/a/b.pdf"):
+            status, _ = self._senden("GET", kaputt, host=f"127.0.0.1:{self.port}")
+            self.assertEqual(status, 404, kaputt)
+
+
+class EmailAnsichtUiTest(unittest.TestCase):
+    """Statik der E-Mail-Ansicht: eigenes Modal, textContent, kein
+    innerHTML, Esc, Download sekundaer."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.html = (REPO_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
+        cls.js = (REPO_ROOT / "web" / "static" / "app.js").read_text(encoding="utf-8")
+
+    def test_email_modal_vorhanden_und_geschlossen(self):
+        treffer = re.search(r'<div id="email-overlay"[^>]*>', self.html)
+        self.assertIsNotNone(treffer)
+        self.assertIn("hidden", treffer.group(0))
+        self.assertIn('id="email-betreff"', self.html)
+        self.assertIn('id="email-text"', self.html)
+        self.assertIn('id="email-anhaenge"', self.html)
+
+    def test_nur_textcontent_und_esc(self):
+        self.assertNotIn("innerHTML", self.js)
+        self.assertIn('$("email-text").textContent', self.js)
+        self.assertIn('if (!$("email-overlay").hidden) $("email-overlay").hidden = true;', self.js)
+        self.assertIn("/ansicht", self.js)
 
 
 if __name__ == "__main__":

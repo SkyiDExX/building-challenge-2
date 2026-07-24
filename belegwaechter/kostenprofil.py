@@ -48,13 +48,16 @@ _PRODUKT_LABEL_MUSTER = re.compile(
     r"\s*:\s*(.+)$",
     re.IGNORECASE | re.MULTILINE,
 )
+_KANAL_LABELS = r"(?:Abrechnung\s+über|Abgerechnet\s+über|Billed\s+(?:via|through|by)|Store)"
+_ZAHLUNGSDIENST_LABELS = (
+    r"(?:Bezahlt\s+über|Bezahlt\s+mit|Paid\s+via|Paid\s+with|Zahlungsmethode"
+    r"|Zahlungsart|Payment\s+method|Zahlungsdienst|Funding\s+source)"
+)
 _KANAL_LABEL_MUSTER = re.compile(
-    r"^(?:Abrechnung\s+über|Abgerechnet\s+über|Billed\s+(?:via|through|by)|Store)\s*:\s*(.+)$",
-    re.IGNORECASE | re.MULTILINE,
+    rf"^{_KANAL_LABELS}\s*:\s*(.+)$", re.IGNORECASE | re.MULTILINE
 )
 _ZAHLUNGSDIENST_LABEL_MUSTER = re.compile(
-    r"^(?:Bezahlt\s+über|Paid\s+via|Zahlungsmethode|Payment\s+method|Zahlungsdienst)\s*:\s*(.+)$",
-    re.IGNORECASE | re.MULTILINE,
+    rf"^{_ZAHLUNGSDIENST_LABELS}\s*:\s*(.+)$", re.IGNORECASE | re.MULTILINE
 )
 _MERCHANT_LABEL_MUSTER = re.compile(
     r"^(?:H(?:ä|ae)ndler|Merchant|Verk(?:ä|ae)ufer|Seller)\s*:\s*(.+)$",
@@ -170,6 +173,22 @@ def _erster_plausibler_treffer(muster: re.Pattern, text: str) -> str | None:
     return kandidat if _produkt_plausibel(kandidat) else None
 
 
+def _label_wert(labels: str, text: str) -> str | None:
+    """Wert zu einem Label, auch wenn er (typisch fuer PDF-Tabellenlayouts)
+    erst auf der Folgezeile steht. Der Kandidat muss die generische
+    Plausibilitaetspruefung bestehen."""
+    muster = re.compile(rf"^[ \t]*{labels}[ \t]*:?[ \t]*(.*)$", re.IGNORECASE | re.MULTILINE)
+    treffer = muster.search(text or "")
+    if not treffer:
+        return None
+    kandidat = treffer.group(1).strip().rstrip(".")
+    if not kandidat:
+        rest = (text or "")[treffer.end():].lstrip("\r\n")
+        naechste = rest.splitlines()[0].strip().rstrip(".") if rest.splitlines() else ""
+        kandidat = naechste
+    return kandidat if kandidat and _produkt_plausibel(kandidat) else None
+
+
 def _intervall_bestimmen(
     text: str, tarif: str | None, zeitraum: str | None, historien_intervall: str | None
 ) -> tuple[str, str]:
@@ -261,8 +280,14 @@ def produktprofil_bestimmen(
             profil.produkt = anzeige
             profil.produkt_herkunft = "aus Rechnungsaussteller"
 
-    profil.abrechnungskanal = _erster_plausibler_treffer(_KANAL_LABEL_MUSTER, gesamt)
-    profil.zahlungsdienst = _erster_plausibler_treffer(_ZAHLUNGSDIENST_LABEL_MUSTER, gesamt)
+    profil.abrechnungskanal = (
+        _erster_plausibler_treffer(_KANAL_LABEL_MUSTER, gesamt)
+        or _label_wert(_KANAL_LABELS, gesamt)
+    )
+    profil.zahlungsdienst = (
+        _erster_plausibler_treffer(_ZAHLUNGSDIENST_LABEL_MUSTER, gesamt)
+        or _label_wert(_ZAHLUNGSDIENST_LABELS, gesamt)
+    )
 
     profil.abrechnungsintervall, profil.intervall_herkunft = _intervall_bestimmen(
         gesamt, profil.tarif, felder.get("zeitraum"), historien_intervall_wert

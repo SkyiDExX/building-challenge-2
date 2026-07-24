@@ -437,6 +437,16 @@ function renderRadar(radar) {
       link.textContent = "Original-PDF";
       aktionen.appendChild(link);
     }
+    if (r.original_eml_url) {
+      const emlAnsicht = document.createElement("button");
+      emlAnsicht.type = "button";
+      emlAnsicht.className = "btn btn-pdf btn-klein";
+      emlAnsicht.textContent = "Original-E-Mail ansehen";
+      emlAnsicht.addEventListener("click", () => {
+        emailAnsichtOeffnen(r.vorgang_id, r.original_eml_url);
+      });
+      aktionen.appendChild(emlAnsicht);
+    }
     const detailsBtn = document.createElement("button");
     detailsBtn.type = "button";
     detailsBtn.className = "btn btn-sekundaer btn-klein";
@@ -589,13 +599,7 @@ function detailOeffnen(b) {
     pdfBtn.hidden = true;
   }
   const emlBtn = $("detail-eml-btn");
-  if (b.original_eml_verfuegbar && b.original_eml_url) {
-    emlBtn.href = b.original_eml_url;
-    emlBtn.hidden = false;
-  } else {
-    emlBtn.removeAttribute("href");
-    emlBtn.hidden = true;
-  }
+  emlBtn.hidden = !(b.original_eml_verfuegbar && b.original_eml_url);
   const korrekturBtn = $("detail-korrektur-btn");
   korrekturBtn.hidden = !(b.reviewstatus === "offen" &&
     (b.ausgang === "review" || b.ausgang === "uebernommen"));
@@ -708,6 +712,81 @@ $("datei-input").addEventListener("change", (e) => {
     }
   })
 );
+
+/* ---------- Sichere E-Mail-Ansicht ---------- */
+
+async function emailAnsichtOeffnen(vorgangId, downloadUrl) {
+  if (!vorgangId) return;
+  try {
+    const resp = await fetch(`/api/vorgaenge/${encodeURIComponent(vorgangId)}/ansicht`);
+    const daten = await resp.json();
+    if (!resp.ok) return;
+    // Ausschliesslich textContent: kein HTML aus der E-Mail, keine
+    // klickbaren Links, keine Remote-Inhalte.
+    $("email-betreff").textContent = daten.betreff || "(ohne Betreff)";
+    const metaTeile = [daten.absender, daten.datum].filter(Boolean);
+    $("email-meta").textContent = metaTeile.join(" · ");
+    $("email-text").textContent = daten.text || "(kein lesbarer Textkörper)";
+    const liste = $("email-anhaenge");
+    liste.textContent = "";
+    if (!daten.anhaenge || daten.anhaenge.length === 0) {
+      const li = document.createElement("li");
+      li.textContent = "Keine Anhänge.";
+      liste.appendChild(li);
+    } else {
+      daten.anhaenge.forEach((a) => {
+        const li = document.createElement("li");
+        li.textContent = a.dateiname;
+        if (a.original_pdf_url) {
+          li.appendChild(document.createTextNode(" "));
+          const link = document.createElement("a");
+          link.className = "btn btn-pdf btn-klein";
+          link.href = a.original_pdf_url;
+          link.target = "_blank";
+          link.rel = "noopener";
+          link.textContent = "PDF öffnen";
+          li.appendChild(link);
+        } else if (a.beleg_id) {
+          li.appendChild(document.createTextNode(" "));
+          const btn = document.createElement("button");
+          btn.type = "button";
+          btn.className = "dublette-link";
+          btn.textContent = "Details";
+          btn.addEventListener("click", () => {
+            const beleg = belegNachId(a.beleg_id);
+            if (beleg) {
+              $("email-overlay").hidden = true;
+              detailOeffnen(beleg);
+            }
+          });
+          li.appendChild(btn);
+        }
+        liste.appendChild(li);
+      });
+    }
+    const download = $("email-download");
+    if (downloadUrl) {
+      download.href = downloadUrl;
+      download.hidden = false;
+    } else {
+      download.removeAttribute("href");
+      download.hidden = true;
+    }
+    $("email-overlay").hidden = false;
+    $("email-schliessen").focus();
+  } catch (err) {
+    fehlerZeigen("E-Mail-Ansicht nicht möglich: " + err.message);
+  }
+}
+
+$("detail-eml-btn").addEventListener("click", () => {
+  const b = aktuellerKorrekturBeleg;
+  if (b) emailAnsichtOeffnen(b.vorgang_id, b.original_eml_url);
+});
+$("email-schliessen").addEventListener("click", () => { $("email-overlay").hidden = true; });
+$("email-overlay").addEventListener("click", (e) => {
+  if (e.target === $("email-overlay")) $("email-overlay").hidden = true;
+});
 
 /* ---------- Korrektur-Dialog: Angaben prüfen und ergänzen ---------- */
 
@@ -924,6 +1003,7 @@ document.addEventListener("keydown", (e) => {
     if (!$("detail-overlay").hidden) detailSchliessen();
     if (!$("reset-overlay").hidden) $("reset-overlay").hidden = true;
     if (!$("korrektur-overlay").hidden) korrekturSchliessen();
+    if (!$("email-overlay").hidden) $("email-overlay").hidden = true;
   }
 });
 

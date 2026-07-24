@@ -96,7 +96,7 @@
         <div class="detail-aktionen">
           <button id="detail-korrektur-btn" class="btn btn-primaer" type="button" hidden>Angaben prüfen und ergänzen</button>
           <a id="detail-pdf-btn" class="btn btn-pdf" target="_blank" rel="noopener" hidden>Original-PDF öffnen</a>
-          <a id="detail-eml-btn" class="btn btn-pdf" download hidden>Original-E-Mail herunterladen</a>
+          <button id="detail-eml-btn" class="btn btn-pdf" type="button" hidden>Original-E-Mail ansehen</button>
         </div>
       </div>
       <details id="pruefnachweis-details" class="klapp-bereich">
@@ -126,6 +126,25 @@
           </details>
         </div>
       </details>
+    </div>
+  </div>
+</div>
+
+<!-- Sichere E-Mail-Ansicht: reiner Text, keine Remote-Inhalte -->
+<div id="email-overlay" class="detail-overlay" hidden>
+  <div class="detail" role="dialog" aria-modal="true" aria-labelledby="email-betreff">
+    <div class="detail-kopf">
+      <h3 id="email-betreff"></h3>
+      <button id="email-schliessen" class="schliessen-btn" type="button" aria-label="Schließen" title="Schließen"><img src="/assets/brand/optitax-close-x-32.png" width="28" height="28" alt=""></button>
+    </div>
+    <div class="detail-inhalt">
+      <p id="email-meta" class="email-meta"></p>
+      <pre id="email-text" class="quelle-vorschau email-text"></pre>
+      <h4 class="email-anhaenge-titel">Anhänge</h4>
+      <ul id="email-anhaenge" class="email-anhaenge"></ul>
+      <div class="dialog-aktionen">
+        <a id="email-download" class="btn btn-sekundaer" download hidden>Originaldatei herunterladen</a>
+      </div>
     </div>
   </div>
 </div>

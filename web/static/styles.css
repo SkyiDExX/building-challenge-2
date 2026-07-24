@@ -636,6 +636,28 @@ main { max-width: 1120px; margin: 0 auto; padding: 8px 20px 40px; }
   font-size: 0.82rem;
 }
 
+/* ---- Sichere E-Mail-Ansicht ---- */
+.email-meta { margin: 12px 0 0; color: var(--text-leise); font-size: 0.9rem; overflow-wrap: anywhere; }
+.email-text { max-height: 40vh; overflow-y: auto; }
+.email-anhaenge-titel {
+  margin: 14px 0 6px;
+  font-size: 0.82rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--text-leise);
+}
+.email-anhaenge {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 0.9rem;
+}
+.email-anhaenge li { overflow-wrap: anywhere; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+
 /* ---- Korrektur-Dialog: Angaben pruefen und ergaenzen ---- */
 .dialog-korrektur { max-width: 640px; }
 .korrektur-hinweis { margin: 12px 0 0; color: var(--text-leise); font-size: 0.88rem; }

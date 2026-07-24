@@ -56,12 +56,42 @@ _QUELLENSTATUS_ANZEIGE = {
     "hinweis": "Hinweis, kein Beleg",
 }
 
-# Original-PDF-Route: die Beleg-ID ist der einzige Client-Input; sie wird
-# nur als DB-Schluessel verwendet, nie als Pfadbestandteil.
-_BELEG_ORIGINAL_MUSTER = re.compile(r"^/api/belege/([A-Za-z0-9-]{1,64})/original$")
+# Original-PDF-Route: die Beleg-ID ist der einzige Client-Input, der die
+# geladene Datei bestimmt; der optionale sichtbare Namens-Slug (max. 100
+# sichere ASCII-Zeichen) wird NIE als Dateipfad verwendet und dient nur
+# einem verstaendlichen Tab-/Dateinamen.
+_BELEG_ORIGINAL_MUSTER = re.compile(
+    r"^/api/belege/([A-Za-z0-9-]{1,64})/original(?:/[A-Za-z0-9._-]{1,100}\.pdf)?$"
+)
+
+_DOKUMENTART_DATEINAME = {
+    "rechnung": "Rechnung",
+    "zahlungsbeleg": "Zahlungsbeleg",
+    "abo_bestaetigung": "Abo-Bestaetigung",
+    "sonstiger_kostennachweis": "Kostennachweis",
+}
+
+
+def _pdf_slug(row: dict, werte: dict) -> str:
+    """Serverseitig erzeugter, aussagekraeftiger PDF-Name aus Produkt,
+    Dokumentart, Rechnungsmonat und Betrag -- ohne persoenliche Namen,
+    E-Mail-Adressen oder Referenznummern. Die harte ASCII-Whitelist von
+    dateinamen.speichername() begrenzt Zeichen und Laenge."""
+    teile = []
+    produkt = werte.get("produkt") or kostenprofil.anzeige_name(werte.get("anbieter"))
+    if produkt:
+        teile.append(produkt)
+    teile.append(_DOKUMENTART_DATEINAME.get(row["dokumentart"], "Beleg"))
+    datum_iso = datumformat.datum_csv(werte.get("datum"))
+    if datum_iso and re.match(r"^\d{4}-\d{2}-\d{2}$", datum_iso):
+        teile.append(datum_iso[:7])
+    if row.get("betrag_dezimal") and werte.get("waehrung"):
+        teile.append(f"{row['betrag_dezimal'].replace('.', '-')}-{werte['waehrung']}")
+    return dateinamen.speichername("_".join(teile)[:90] + ".pdf")
 _BELEG_KORREKTUR_MUSTER = re.compile(r"^/api/belege/([A-Za-z0-9-]{1,64})/korrekturen$")
-# Original-EML-Route: ausschliesslich per Vorgangs-ID, nie per Pfad.
+# Original-EML-Routen: ausschliesslich per Vorgangs-ID, nie per Pfad.
 _VORGANG_EML_MUSTER = re.compile(r"^/api/vorgaenge/([A-Za-z0-9-]{1,64})/original-eml$")
+_VORGANG_ANSICHT_MUSTER = re.compile(r"^/api/vorgaenge/([A-Za-z0-9-]{1,64})/ansicht$")
 _WAEHRUNG_MUSTER = re.compile(r"^[A-Z]{3}$")
 _MAX_KORREKTUR_FELDLAENGE = 200
 _MAX_KORREKTUR_BODY = 64 * 1024
@@ -152,9 +182,12 @@ def _beleg_zu_json(
         felder["zeitraum"]["wert"] = datumformat.zeitraum_ui(felder["zeitraum"]["wert"])
     checkliste = json.loads(row["checkliste_json"])
     pdf_verfuegbar = _original_pdf_verfuegbar(row)
-    ergebnis_zusatz = (
-        {"original_pdf_url": f"/api/belege/{row['id']}/original"} if pdf_verfuegbar else {}
-    )
+    ergebnis_zusatz = {}
+    if pdf_verfuegbar:
+        werte = {name: (f or {}).get("wert") for name, f in felder.items()}
+        ergebnis_zusatz["original_pdf_url"] = (
+            f"/api/belege/{row['id']}/original/{_pdf_slug(row, werte)}"
+        )
     eml_verfuegbar = _original_eml_verfuegbar(conn, row) if conn is not None else False
     if eml_verfuegbar:
         ergebnis_zusatz["original_eml_url"] = f"/api/vorgaenge/{row['vorgang_id']}/original-eml"
@@ -377,7 +410,9 @@ def _abo_uebersicht(conn) -> list[dict]:
             "dokumente": dokumente,
         }
         if _original_pdf_verfuegbar(row):
-            karte["original_pdf_url"] = f"/api/belege/{row['id']}/original"
+            karte["original_pdf_url"] = (
+                f"/api/belege/{row['id']}/original/{_pdf_slug(row, werte)}"
+            )
         if _original_eml_verfuegbar(conn, row):
             karte["original_eml_url"] = f"/api/vorgaenge/{row['vorgang_id']}/original-eml"
         karten.append(karte)
@@ -452,14 +487,13 @@ class BelegwaechterHandler(BaseHTTPRequestHandler):
         einem wertfreien 404 ohne Pfadangaben."""
         nicht_gefunden = {"fehler": "nicht gefunden"}
         conn = speicher.verbindung()
-        row = conn.execute(
-            "SELECT dateiname, speichername, dateityp, storage_key FROM belege WHERE id = ?",
-            (beleg_id,),
-        ).fetchone()
-        conn.close()
+        row = speicher.beleg_nach_id(conn, beleg_id)
         if row is None or row["dateityp"] != "PDF" or not row["storage_key"]:
+            conn.close()
             self._json(404, nicht_gefunden)
             return
+        werte = _effektive_werte(conn, row)
+        conn.close()
         try:
             pfad = speicher.pfad_aus_key(row["storage_key"])
             inhalt = pfad.read_bytes()
@@ -469,11 +503,9 @@ class BelegwaechterHandler(BaseHTTPRequestHandler):
         if not inhalt.startswith(b"%PDF-"):
             self._json(404, nicht_gefunden)
             return
-        # speichername() ist eine harte ASCII-Whitelist -- header-sicher und
-        # ohne Pfadbestandteile.
-        anzeigename = dateinamen.speichername(row["speichername"] or row["dateiname"] or "beleg.pdf")
-        if not anzeigename.lower().endswith(".pdf"):
-            anzeigename += ".pdf"
+        # Sichtbarer Dateiname: serverseitig generierter Slug (Produkt,
+        # Dokumentart, Monat, Betrag), nie der URL-Slug und nie ein Pfad.
+        anzeigename = _pdf_slug(row, werte)
         self.send_response(200)
         self.send_header("Content-Type", "application/pdf")
         self.send_header("Content-Disposition", f'inline; filename="{anzeigename}"')
@@ -521,6 +553,75 @@ class BelegwaechterHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(inhalt)))
         self.end_headers()
         self.wfile.write(inhalt)
+
+    def _vorgang_ansicht(self, vorgang_id: str) -> None:
+        """Sichere E-Mail-Ansicht als JSON: Betreff, bereinigter Absender,
+        Datum, reiner Textkoerper und die Anhangszuordnung zu vorhandenen
+        Belegen. Es wird nie das urspruengliche HTML eingebettet, nichts
+        extern nachgeladen und kein Skript aus der E-Mail ausgefuehrt; die
+        Oberflaeche rendert ausschliesslich per textContent. Der
+        eml_storage_key stammt nie aus der URL."""
+        nicht_gefunden = {"fehler": "nicht gefunden"}
+        conn = speicher.verbindung()
+        vorgang = conn.execute(
+            "SELECT eml_dateiname, eml_storage_key FROM vorgaenge WHERE id = ?",
+            (vorgang_id,),
+        ).fetchone()
+        if vorgang is None or not vorgang["eml_storage_key"]:
+            conn.close()
+            self._json(404, nicht_gefunden)
+            return
+        try:
+            pfad = speicher.pfad_aus_key(vorgang["eml_storage_key"])
+            inhalt = pfad.read_bytes()
+        except (dateinamen.UnsichererPfadFehler, OSError):
+            conn.close()
+            self._json(404, nicht_gefunden)
+            return
+        from belegwaechter import mailparser
+
+        if not mailparser.ist_eml(inhalt):
+            conn.close()
+            self._json(404, nicht_gefunden)
+            return
+        eml = mailparser.zerlegen(inhalt)
+
+        beleg_rows = [
+            dict(r) for r in conn.execute(
+                "SELECT * FROM belege WHERE vorgang_id = ?", (vorgang_id,)
+            ).fetchall()
+        ]
+        beleg_je_name = {r["dateiname"]: r for r in beleg_rows}
+        anhaenge = []
+        for anhang in eml.anhaenge:
+            name = dateinamen.anzeigename(anhang.dateiname)
+            eintrag = {"dateiname": steuerzeichen.feldwert_bereinigen(name) or "Anhang"}
+            row = beleg_je_name.get(name)
+            if row is not None:
+                eintrag["beleg_id"] = row["id"]
+                if _original_pdf_verfuegbar(row):
+                    werte = _effektive_werte(conn, row)
+                    eintrag["original_pdf_url"] = (
+                        f"/api/belege/{row['id']}/original/{_pdf_slug(row, werte)}"
+                    )
+            anhaenge.append(eintrag)
+        conn.close()
+
+        payload = {
+            "betreff": _api_text(eml.betreff),
+            "absender": _api_text(eml.absender),
+            "datum": _api_text(eml.mail_datum),
+            "text": steuerzeichen.flusstext_bereinigen(eml.text or "")[:20000],
+            "anhaenge": anhaenge,
+        }
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
 
     def _korrektur_wert_pruefen(self, feld: str, wert) -> tuple[str | None, str | None]:
         """Serverseitige Validierung eines manuell gesetzten Werts. Liefert
@@ -668,15 +769,19 @@ class BelegwaechterHandler(BaseHTTPRequestHandler):
                 return
             self._beleg_original(treffer.group(1))
         elif self.path.startswith("/api/vorgaenge/"):
-            treffer = _VORGANG_EML_MUSTER.match(self.path)
-            if treffer is None:
+            ansicht = _VORGANG_ANSICHT_MUSTER.match(self.path)
+            eml_treffer = _VORGANG_EML_MUSTER.match(self.path)
+            if ansicht is None and eml_treffer is None:
                 self._json(404, {"fehler": "nicht gefunden"})
                 return
             erlaubt, code, fehler = _zugriff_erlaubt(self, veraendernd=False)
             if not erlaubt:
                 self._json(code, fehler)
                 return
-            self._vorgang_original_eml(treffer.group(1))
+            if ansicht is not None:
+                self._vorgang_ansicht(ansicht.group(1))
+            else:
+                self._vorgang_original_eml(eml_treffer.group(1))
         elif self.path == "/api/ergebnis":
             erlaubt, code, fehler = _zugriff_erlaubt(self, veraendernd=False)
             if not erlaubt:
